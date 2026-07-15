@@ -1,0 +1,4 @@
+using System.Globalization; using System.Windows; using System.Windows.Data; using System.Windows.Media;
+namespace CodexAccountBar;
+public sealed class BoolVisibilityConverter : IValueConverter { public object Convert(object value, Type t, object p, CultureInfo c) => value is true ? Visibility.Visible : Visibility.Collapsed; public object ConvertBack(object v, Type t, object p, CultureInfo c) => System.Windows.Data.Binding.DoNothing; }
+public sealed class ActiveBorderConverter : IValueConverter { public object Convert(object value, Type t, object p, CultureInfo c) => new SolidColorBrush(value is true ? System.Windows.Media.Color.FromRgb(38,117,62) : System.Windows.Media.Color.FromRgb(52,58,59)); public object ConvertBack(object v, Type t, object p, CultureInfo c) => System.Windows.Data.Binding.DoNothing; }
