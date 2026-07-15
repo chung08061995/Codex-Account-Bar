@@ -19,7 +19,7 @@ Install the .NET 8 SDK, then run:
 .\publish-win-x64.ps1
 ```
 
-Output: `bin\Release\net8.0-windows10.0.19041.0\win-x64\publish\CodexAccountBar.exe`.
+Output: `bin\Release\net8.0-windows10.0.19041.0\win-x64\publish\CodexAccountBar.exe`. It is a self-contained single executable; the .NET runtime and WPF native libraries are embedded.
 
 ## Security
 
