@@ -1,4 +1,4 @@
-using System.Diagnostics; using System.Text.Json;
+using System.Diagnostics; using System.Net; using System.Net.Http; using System.Security.Cryptography; using System.Text; using System.Text.Json;
 namespace CodexAccountBar.Services;
 public sealed class CodexService
 {
@@ -7,20 +7,11 @@ public sealed class CodexService
     public async Task WriteAndRestartAsync(string json){Directory.CreateDirectory(CodexHome);using(JsonDocument.Parse(json)){}var temp=AuthPath+".cab.tmp";await File.WriteAllTextAsync(temp,json);File.Move(temp,AuthPath,true);await Restart();}
     public async Task<string> LoginIsolatedAsync()
     {
-        var command=await Find()??throw new FileNotFoundException("Codex CLI was not found. Install Codex or add codex.exe/codex.cmd to PATH.");var home=Path.Combine(Path.GetTempPath(),"CodexAccountBar-Login-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(home);
-        try
-        {
-            var psi=new ProcessStartInfo(command.IsCmd?"cmd.exe":command.Path){UseShellExecute=true,WorkingDirectory=home};
-            if(command.IsCmd){psi.ArgumentList.Add("/d");psi.ArgumentList.Add("/c");psi.ArgumentList.Add(command.Path);psi.ArgumentList.Add("login");psi.ArgumentList.Add("-c");psi.ArgumentList.Add("cli_auth_credentials_store=\"file\"");}
-            else{psi.ArgumentList.Add("login");psi.ArgumentList.Add("-c");psi.ArgumentList.Add("cli_auth_credentials_store=\"file\"");}
-            psi.Environment["CODEX_HOME"]=home;
-            using var p=Process.Start(psi)??throw new FileNotFoundException("Codex CLI could not be started.");await p.WaitForExitAsync();
-            var path=Path.Combine(home,"auth.json");if(p.ExitCode!=0||!File.Exists(path))throw new InvalidOperationException("Codex sign-in failed or was cancelled.");return await File.ReadAllTextAsync(path);
-        }
-        finally{try{Directory.Delete(home,true);}catch{}}
+        const string clientId="app_EMoamEEZ73f0CkXaXp7hrann";var verifier=Base64Url(RandomNumberGenerator.GetBytes(32));var challenge=Base64Url(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));var state=Base64Url(RandomNumberGenerator.GetBytes(32));
+        HttpListener? listener=null;int port=1455;foreach(var candidate in new[]{1455,1457}){try{listener=new HttpListener();listener.Prefixes.Add($"http://localhost:{candidate}/");listener.Start();port=candidate;break;}catch{listener?.Close();listener=null;}}if(listener is null)throw new InvalidOperationException("Could not start the local login callback. Try closing another Codex login window and retry.");
+        using(listener){var redirect=$"http://localhost:{port}/auth/callback";var query=string.Join("&",new Dictionary<string,string>{{"response_type","code"},{"client_id",clientId},{"redirect_uri",redirect},{"scope","openid profile email offline_access api.connectors.read api.connectors.invoke"},{"code_challenge",challenge},{"code_challenge_method","S256"},{"id_token_add_organizations","true"},{"codex_cli_simplified_flow","true"},{"state",state},{"originator","codex_cli_rs"}}.Select(x=>$"{Uri.EscapeDataString(x.Key)}={Uri.EscapeDataString(x.Value)}"));Process.Start(new ProcessStartInfo($"https://auth.openai.com/oauth/authorize?{query}"){UseShellExecute=true});using var timeout=new CancellationTokenSource(TimeSpan.FromMinutes(10));HttpListenerContext context;try{context=await listener.GetContextAsync().WaitAsync(timeout.Token);}catch(TimeoutException){throw new TimeoutException("Login timed out or was cancelled.");}var code=context.Request.QueryString["code"];var returnedState=context.Request.QueryString["state"];var error=context.Request.QueryString["error"];var response=Encoding.UTF8.GetBytes(error is null?"<html><body>Sign-in complete. You may close this tab.</body></html>":"<html><body>Sign-in was cancelled. You may close this tab.</body></html>");context.Response.ContentType="text/html";context.Response.ContentLength64=response.Length;await context.Response.OutputStream.WriteAsync(response);context.Response.Close();if(error is not null)throw new InvalidOperationException("Codex sign-in was cancelled.");if(code is null||returnedState!=state)throw new InvalidOperationException("Codex sign-in callback was invalid.");using var http=new HttpClient();using var form=new FormUrlEncodedContent(new Dictionary<string,string>{{"grant_type","authorization_code"},{"code",code},{"redirect_uri",redirect},{"client_id",clientId},{"code_verifier",verifier}});using var tokenResponse=await http.PostAsync("https://auth.openai.com/oauth/token",form);var tokenJson=await tokenResponse.Content.ReadAsStringAsync();if(!tokenResponse.IsSuccessStatusCode)throw new InvalidOperationException("Codex sign-in token exchange failed.");using var tokenDoc=JsonDocument.Parse(tokenJson);var tokens=tokenDoc.RootElement;var auth=new{auth_mode="chatgpt",OPENAI_API_KEY=(string?)null,tokens=new{id_token=tokens.GetProperty("id_token").GetString(),access_token=tokens.GetProperty("access_token").GetString(),refresh_token=tokens.GetProperty("refresh_token").GetString(),account_id=(string?)null},last_refresh=DateTimeOffset.UtcNow};return JsonSerializer.Serialize(auth);}
     }
-    private sealed record CodexCommand(string Path,bool IsCmd);
-    private static async Task<CodexCommand?> Find(){foreach(var name in new[]{"codex.cmd","codex.bat","codex.exe"}){var r=await ProcessRunner.RunAsync("where.exe",[name],5000);var path=r.ExitCode==0?r.Output.Split(['\r','\n'],StringSplitOptions.RemoveEmptyEntries).FirstOrDefault(p=>!p.Contains("\\WindowsApps\\OpenAI.Codex_",StringComparison.OrdinalIgnoreCase)):null;if(path is not null)return new(path,!name.EndsWith(".exe",StringComparison.OrdinalIgnoreCase));}return null;}
+    private static string Base64Url(byte[] bytes)=>Convert.ToBase64String(bytes).TrimEnd('=').Replace('+','-').Replace('/','_');
     private static async Task Restart()
     {
         var current=Environment.ProcessId;var apps=Process.GetProcesses().Where(p=>p.Id!=current).Select(p=>{try{return (p,p.MainModule?.FileName);}catch{return (p,null);}}).Where(x=>x.Item2 is not null&&x.Item2.Contains("\\WindowsApps\\OpenAI.Codex_",StringComparison.OrdinalIgnoreCase)).ToList();
