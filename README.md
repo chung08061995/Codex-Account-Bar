@@ -26,3 +26,18 @@ Output: `bin\Release\net8.0-windows10.0.19041.0\win-x64\publish\CodexAccountBar.
 DPAPI blobs can only be decrypted by the same Windows user on the same installation. Token contents are never logged. Process-mode 9Router shutdown only proceeds after its port owner command line is verified to contain `9router`. UAC appears only when a Windows service needs administrator rights.
 
 Detection order is Windows service, Docker, port `20128` owner, then `9router.cmd` on `PATH`.
+
+## Troubleshooting
+
+The app writes startup and crash diagnostics to:
+
+```text
+%LOCALAPPDATA%\CodexAccountBar\Logs\app.log
+```
+
+Version 1.0.1 no longer launches PowerShell or `taskkill` for 9Router detection/control. It uses the Windows service API, a local HTTP health check, and direct process APIs instead.
+
+Two Windows builds are published:
+
+- `CodexAccountBar-Slim.exe`: recommended; small and does not self-extract, but requires the .NET 8 Desktop Runtime.
+- `CodexAccountBar-SelfContained.exe`: includes .NET 8 and runs without a separate runtime installation, but is much larger.

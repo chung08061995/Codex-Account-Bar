@@ -1,36 +1,164 @@
-using System.Diagnostics; using System.Text.Json; using CodexAccountBar.Models;
+using System.Diagnostics;
+using System.Net.Http;
+using System.ServiceProcess;
+using CodexAccountBar.Models;
+
 namespace CodexAccountBar.Services;
+
 public sealed class NineRouterService
 {
-    private const int Port=20128;
+    private const int Port = 20128;
+    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(2) };
+
     public async Task<NineRouterStatus> DetectAsync()
     {
-        var svc=await Service();if(svc is{Running:true})return svc;var docker=await Docker();if(docker is{Running:true})return docker;var owner=await Owner();if(owner is not null&&owner.Value.Command.Contains("9router",StringComparison.OrdinalIgnoreCase))return new(true,true,NineRouterKind.NpmCli,$"npm CLI · localhost:{Port}",ProcessId:owner.Value.Pid);
-        if(svc is not null)return svc;if(docker is not null)return docker;var cli=await Cli();if(cli is not null)return new(true,false,NineRouterKind.NpmCli,"npm CLI detected",Executable:cli);var data=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),"9router");return Directory.Exists(data)?new(false,false,NineRouterKind.None,"Data found, but no runnable install was detected"):new(false,false,NineRouterKind.None,"Not installed");
+        var service = FindService();
+        if (service is { Running: true }) return service;
+
+        var healthy = await IsHealthyAsync();
+        var docker = await FindDockerAsync(healthy);
+        if (docker is { Running: true }) return docker;
+
+        if (healthy)
+            return new(true, true, NineRouterKind.NpmCli, $"9Router API · localhost:{Port}", ProcessId: await FindPortOwnerAsync());
+
+        if (service is not null) return service;
+        if (docker is not null) return docker;
+        var cli = FindOnPath("9router.cmd") ?? FindOnPath("9router.exe");
+        if (cli is not null) return new(true, false, NineRouterKind.NpmCli, "npm CLI detected", Executable: cli);
+
+        var data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "9router");
+        return Directory.Exists(data)
+            ? new(false, false, NineRouterKind.None, "9Router data found, but no runnable install was detected")
+            : new(false, false, NineRouterKind.None, "Not installed");
     }
+
     public async Task<NineRouterStatus> SetRunningAsync(bool running)
     {
-        var s=await DetectAsync();if(!s.Installed)throw new InvalidOperationException("9Router is not installed.");if(s.Running==running)return s;if(running)await Start(s);else await Stop(s);
-        for(var i=0;i<24;i++){await Task.Delay(350);var n=await DetectAsync();if(n.Running==running)return n;}throw new InvalidOperationException($"9Router did not {(running?"start":"stop")} in time.");
+        var status = await DetectAsync();
+        if (!status.Installed) throw new InvalidOperationException("9Router is not installed.");
+        if (status.Running == running) return status;
+        AppLog.Info($"9Router requested state: {running}; kind: {status.Kind}");
+        if (running) await StartAsync(status); else await StopAsync(status);
+
+        for (var i = 0; i < 24; i++)
+        {
+            await Task.Delay(350);
+            var next = await DetectAsync();
+            if (next.Running == running) return next;
+        }
+        throw new InvalidOperationException($"9Router did not {(running ? "start" : "stop")} in time.");
     }
-    private static async Task Start(NineRouterStatus s)
+
+    private async Task StartAsync(NineRouterStatus status)
     {
-        if(s.Kind==NineRouterKind.WindowsService&&s.ServiceName is not null){var r=await ProcessRunner.RunAsync("sc.exe",["start",s.ServiceName]);if(r.ExitCode!=0)await Elevated("start",s.ServiceName);}
-        else if(s.Kind==NineRouterKind.Docker){var r=await ProcessRunner.RunAsync("docker.exe",["start","9router"],30000);if(r.ExitCode!=0)throw new InvalidOperationException(r.Error);}
-        else{var cli=s.Executable??await Cli()??throw new FileNotFoundException("9Router CLI not found.");Process.Start(new ProcessStartInfo(cli){UseShellExecute=true,WindowStyle=ProcessWindowStyle.Hidden,Arguments="--tray --skip-update --port 20128"});}
+        if (status.Kind == NineRouterKind.WindowsService && status.ServiceName is not null)
+        {
+            using var service = new ServiceController(status.ServiceName);
+            service.Start(); service.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(15));
+            return;
+        }
+        if (status.Kind == NineRouterKind.Docker)
+        {
+            var docker = FindOnPath("docker.exe") ?? throw new FileNotFoundException("Docker CLI was not found.");
+            var result = await ProcessRunner.RunAsync(docker, ["start", "9router"], 30_000);
+            if (result.ExitCode != 0) throw new InvalidOperationException(result.Error);
+            return;
+        }
+        var cli = status.Executable ?? FindOnPath("9router.cmd") ?? FindOnPath("9router.exe") ?? throw new FileNotFoundException("9Router CLI was not found.");
+        Process.Start(new ProcessStartInfo(cli) { UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden, Arguments = "--tray --skip-update --port 20128" });
     }
-    private static async Task Stop(NineRouterStatus s)
+
+    private async Task StopAsync(NineRouterStatus status)
     {
-        if(s.Kind==NineRouterKind.WindowsService&&s.ServiceName is not null){var r=await ProcessRunner.RunAsync("sc.exe",["stop",s.ServiceName]);if(r.ExitCode!=0)await Elevated("stop",s.ServiceName);}
-        else if(s.Kind==NineRouterKind.Docker){var r=await ProcessRunner.RunAsync("docker.exe",["stop","9router"],30000);if(r.ExitCode!=0)throw new InvalidOperationException(r.Error);}
-        else{var o=await Owner();if(o is null||o.Value.Pid!=s.ProcessId||!o.Value.Command.Contains("9router",StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("Refused to stop: port owner is not verified as 9Router.");var r=await ProcessRunner.RunAsync("taskkill.exe",["/PID",o.Value.Pid.ToString(),"/T","/F"]);if(r.ExitCode!=0)throw new InvalidOperationException(r.Error);}
+        if (status.Kind == NineRouterKind.WindowsService && status.ServiceName is not null)
+        {
+            using var service = new ServiceController(status.ServiceName);
+            service.Stop(); service.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(15));
+            return;
+        }
+        if (status.Kind == NineRouterKind.Docker)
+        {
+            var docker = FindOnPath("docker.exe") ?? throw new FileNotFoundException("Docker CLI was not found.");
+            var result = await ProcessRunner.RunAsync(docker, ["stop", "9router"], 30_000);
+            if (result.ExitCode != 0) throw new InvalidOperationException(result.Error);
+            return;
+        }
+        if (!await IsHealthyAsync()) throw new InvalidOperationException("The service on port 20128 is not verified as 9Router.");
+        var pid = status.ProcessId ?? await FindPortOwnerAsync() ?? throw new InvalidOperationException("Could not identify the 9Router process.");
+        using var process = Process.GetProcessById(pid);
+        var allowed = new[] { "node", "bun", "9router" }.Any(x => process.ProcessName.Contains(x, StringComparison.OrdinalIgnoreCase));
+        if (!allowed) throw new InvalidOperationException($"Refused to stop unexpected process: {process.ProcessName}.");
+        process.Kill(true); await process.WaitForExitAsync();
     }
-    private static async Task<NineRouterStatus?> Service()
+
+    private async Task<bool> IsHealthyAsync()
     {
-        const string ps="$s=Get-CimInstance Win32_Service|?{$_.Name -match '9router|nine.?router' -or $_.DisplayName -match '9router|nine.?router'}|select -First 1 Name,State;if($s){$s|ConvertTo-Json -Compress}";try{var r=await ProcessRunner.RunAsync("powershell.exe",["-NoProfile","-NonInteractive","-Command",ps]);if(string.IsNullOrWhiteSpace(r.Output))return null;using var d=JsonDocument.Parse(r.Output);var x=d.RootElement;var name=x.GetProperty("Name").GetString();var state=x.GetProperty("State").GetString();return new(true,state=="Running",NineRouterKind.WindowsService,$"Windows service · {state}",name);}catch{return null;}
+        try
+        {
+            using var response = await _http.GetAsync($"http://127.0.0.1:{Port}/api/settings");
+            if (!response.IsSuccessStatusCode) return false;
+            var body = await response.Content.ReadAsStringAsync();
+            return body.Contains("provider", StringComparison.OrdinalIgnoreCase) || body.Contains("settings", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
     }
-    private static async Task<NineRouterStatus?> Docker(){try{var r=await ProcessRunner.RunAsync("docker.exe",["ps","-a","--filter","name=^/9router$","--format","{{.Status}}"],5000);var s=r.Output.Trim();return r.ExitCode==0&&s.Length>0?new(true,s.StartsWith("Up "),NineRouterKind.Docker,"Docker · "+s):null;}catch{return null;}}
-    private static async Task<(int Pid,string Command)?> Owner(){var ps=$"$c=Get-NetTCPConnection -LocalPort {Port} -State Listen -ErrorAction SilentlyContinue|select -First 1;if($c){{$id=$c.OwningProcess;$root=$id;$cmd='';for($i=0;$i -lt 6 -and $id -gt 0;$i++){{$p=Get-CimInstance Win32_Process -Filter \"ProcessId=$id\";$cmd+=' '+$p.CommandLine;if($p.CommandLine -match '9router'){{$root=$p.ProcessId;break}};$id=$p.ParentProcessId}};[pscustomobject]@{{Pid=$root;Command=$cmd}}|ConvertTo-Json -Compress}}";try{var r=await ProcessRunner.RunAsync("powershell.exe",["-NoProfile","-NonInteractive","-Command",ps]);if(string.IsNullOrWhiteSpace(r.Output))return null;using var d=JsonDocument.Parse(r.Output);return(d.RootElement.GetProperty("Pid").GetInt32(),d.RootElement.GetProperty("Command").GetString()??"");}catch{return null;}}
-    private static async Task<string?> Cli(){try{var r=await ProcessRunner.RunAsync("where.exe",["9router.cmd"],5000);return r.ExitCode==0?r.Output.Split(['\r','\n'],StringSplitOptions.RemoveEmptyEntries).FirstOrDefault():null;}catch{return null;}}
-    private static async Task Elevated(string action,string service){var args=$"-NoProfile -Command \"Start-Process sc.exe -Verb RunAs -Wait -ArgumentList '{action}','{service}'\"";var p=Process.Start(new ProcessStartInfo("powershell.exe",args){UseShellExecute=true})??throw new InvalidOperationException("Administrator approval is required.");await p.WaitForExitAsync();}
+
+    private static NineRouterStatus? FindService()
+    {
+        try
+        {
+            foreach (var service in ServiceController.GetServices())
+            {
+                using (service)
+                {
+                    if (!service.ServiceName.Contains("9router", StringComparison.OrdinalIgnoreCase) &&
+                        !service.DisplayName.Contains("9router", StringComparison.OrdinalIgnoreCase) &&
+                        !service.DisplayName.Contains("nine router", StringComparison.OrdinalIgnoreCase)) continue;
+                    var running = service.Status == ServiceControllerStatus.Running;
+                    return new(true, running, NineRouterKind.WindowsService, $"Windows service · {service.Status}", service.ServiceName);
+                }
+            }
+        }
+        catch (Exception ex) { AppLog.Error("9Router service detection", ex); }
+        return null;
+    }
+
+    private static async Task<NineRouterStatus?> FindDockerAsync(bool apiRunning)
+    {
+        var docker = FindOnPath("docker.exe"); if (docker is null) return null;
+        try
+        {
+            var result = await ProcessRunner.RunAsync(docker, ["ps", "-a", "--filter", "name=^/9router$", "--format", "{{.Status}}"], 5_000);
+            var value = result.Output.Trim();
+            if (result.ExitCode != 0 || value.Length == 0) return null;
+            return new(true, apiRunning && value.StartsWith("Up ", StringComparison.OrdinalIgnoreCase), NineRouterKind.Docker, "Docker · " + value);
+        }
+        catch { return null; }
+    }
+
+    private static async Task<int?> FindPortOwnerAsync()
+    {
+        try
+        {
+            var result = await ProcessRunner.RunAsync("netstat.exe", ["-ano", "-p", "TCP"], 5_000);
+            foreach (var line in result.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 5 || !parts[1].EndsWith(":" + Port, StringComparison.Ordinal) || !parts[3].Equals("LISTENING", StringComparison.OrdinalIgnoreCase)) continue;
+                if (int.TryParse(parts[4], out var pid)) return pid;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    private static string? FindOnPath(string file)
+    {
+        var candidates = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(x => Path.Combine(x.Trim('"'), file)).ToList();
+        candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm", file));
+        candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Docker", "Docker", "resources", "bin", file));
+        return candidates.FirstOrDefault(File.Exists);
+    }
 }
