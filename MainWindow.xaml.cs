@@ -9,7 +9,22 @@ public partial class MainWindow:Window,INotifyPropertyChanged
     public async Task RefreshAllAsync(){Message="";await RefreshRouter();foreach(var a in Accounts){try{var u=await _usage.FetchAsync(await _vault.ReadAuthAsync(a.Id));a.SessionUsed=u.SessionUsed;a.WeeklyUsed=u.WeeklyUsed;a.SessionReset=u.SessionReset;a.WeeklyReset=u.WeeklyReset;a.StatusText="Usage refreshed";}catch(Exception e){a.StatusText=e.Message;}a.NotifyAll();}}
     private async Task RefreshRouter(){var s=await _router.DetectAsync();RouterRunning=s.Running;_routerCanToggle=s.Installed;RouterDetail=s.Detail;Changed(nameof(RouterCanToggle));}
     private async void RouterToggle_Click(object s,RoutedEventArgs e){if(_routerBusy)return;var requested=(s as System.Windows.Controls.CheckBox)?.IsChecked==true;_routerBusy=true;Changed(nameof(RouterCanToggle));RouterDetail=requested?"Starting 9Router…":"Stopping 9Router…";try{var n=await _router.SetRunningAsync(requested);RouterRunning=n.Running;RouterDetail=n.Detail;}catch(Exception x){Message=x.Message;await RefreshRouter();}finally{_routerBusy=false;Changed(nameof(RouterCanToggle));}}
-    private async void Add_Click(object s,RoutedEventArgs e){Message="Complete Codex sign-in in your browser…";try{var a=await _vault.SaveAsync(await _codex.LoginIsolatedAsync());if(!Accounts.Any(x=>x.Id==a.Id))Accounts.Add(a);Changed(nameof(EmptyVisibility));Message=$"Saved {a.Email} securely.";}catch(Exception x){Message=x.Message;}}
+    private async void Add_Click(object s,RoutedEventArgs e)
+    {
+        Message="Complete Codex sign-in in your browser…";
+        try
+        {
+            string auth;
+            try { auth=await _codex.LoginIsolatedAsync(); }
+            catch (FileNotFoundException)
+            {
+                auth=await _codex.ReadActiveAuthAsync() ?? throw new InvalidOperationException("Codex CLI is not installed and no active Codex account was found. Install the Codex CLI to add a new account.");
+                Message="Codex CLI not found; importing the account currently signed in to Codex…";
+            }
+            var a=await _vault.SaveAsync(auth);if(!Accounts.Any(x=>x.Id==a.Id))Accounts.Add(a);Changed(nameof(EmptyVisibility));Message=$"Saved {a.Email} securely.";
+        }
+        catch(Exception x){Message=x.Message;}
+    }
     private async void Switch_Click(object s,RoutedEventArgs e){if((s as System.Windows.Controls.Button)?.Tag is not AccountRecord a)return;try{await _codex.WriteAndRestartAsync(await _vault.ReadAuthAsync(a.Id));foreach(var x in Accounts){x.IsActive=x.Id==a.Id;x.NotifyAll();}Message=$"Switched to {a.Email}. Codex was restarted when a desktop window was detected.";}catch(Exception x){Message=x.Message;}}
     private async void Remove_Click(object s,RoutedEventArgs e){if((s as System.Windows.Controls.Button)?.Tag is not AccountRecord a)return;if(System.Windows.MessageBox.Show($"Remove {a.Email} from this app?","Codex Account Bar",MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes)return;await _vault.RemoveAsync(a.Id);Accounts.Remove(a);Changed(nameof(EmptyVisibility));}
     private async void Refresh_Click(object s,RoutedEventArgs e)=>await RefreshAllAsync();private void Hide_Click(object s,RoutedEventArgs e)=>Hide();private void Settings_Click(object s,RoutedEventArgs e)=>Message=$"Codex auth: {_codex.AuthPath}\n9Router service, Docker and npm CLI detection enabled.";public void ForceClose(){_forceClose=true;Close();}
