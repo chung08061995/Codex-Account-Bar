@@ -50,6 +50,11 @@ public sealed class NineRouterService
         throw new InvalidOperationException($"9Router did not {(running ? "start" : "stop")} in time.");
     }
 
+    public async Task EnsureStoppedAsync()
+    {
+        var status=await DetectAsync();if(status.Installed&&status.Running)await SetRunningAsync(false);
+    }
+
     private async Task StartAsync(NineRouterStatus status)
     {
         if (status.Kind == NineRouterKind.WindowsService && status.ServiceName is not null)

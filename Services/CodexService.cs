@@ -4,6 +4,12 @@ public sealed class CodexService
 {
     public string CodexHome=>Environment.GetEnvironmentVariable("CODEX_HOME") is{Length:>0}v?v:Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".codex"); public string AuthPath=>Path.Combine(CodexHome,"auth.json");
     public async Task<string?> ReadActiveAuthAsync()=>File.Exists(AuthPath)?await File.ReadAllTextAsync(AuthPath):null;
+    public async Task RestoreOfficialConfigAsync()
+    {
+        var path=Path.Combine(CodexHome,"config.toml");if(!File.Exists(path))return;var lines=await File.ReadAllLinesAsync(path);var output=new List<string>();var section=new List<string>();
+        void Flush(){if(section.Count==0)return;var block=string.Join("\n",section);if(!block.Contains("9router",StringComparison.OrdinalIgnoreCase)&&!block.Contains("localhost:20128",StringComparison.OrdinalIgnoreCase)&&!block.Contains("127.0.0.1:20128",StringComparison.OrdinalIgnoreCase))output.AddRange(section);section.Clear();}
+        foreach(var line in lines){var trimmed=line.Trim();if(trimmed.StartsWith('[')){Flush();section.Add(line);continue;}if(section.Count>0){section.Add(line);continue;}if(trimmed.StartsWith("model_provider",StringComparison.OrdinalIgnoreCase)&&(trimmed.Contains("9router",StringComparison.OrdinalIgnoreCase)||trimmed.Contains("router",StringComparison.OrdinalIgnoreCase)))continue;if((trimmed.StartsWith("base_url",StringComparison.OrdinalIgnoreCase)||trimmed.StartsWith("api_base",StringComparison.OrdinalIgnoreCase))&&(trimmed.Contains(":20128",StringComparison.OrdinalIgnoreCase)||trimmed.Contains("9router",StringComparison.OrdinalIgnoreCase)))continue;output.Add(line);}Flush();var updated=string.Join(Environment.NewLine,output).TrimEnd()+Environment.NewLine;if(updated!=string.Join(Environment.NewLine,lines).TrimEnd()+Environment.NewLine){var backup=path+".codex-bar.bak";File.Copy(path,backup,true);await File.WriteAllTextAsync(path+".tmp",updated);File.Move(path+".tmp",path,true);}
+    }
     public async Task WriteAndRestartAsync(string json){Directory.CreateDirectory(CodexHome);using(JsonDocument.Parse(json)){}var temp=AuthPath+".cab.tmp";await File.WriteAllTextAsync(temp,json);File.Move(temp,AuthPath,true);await Restart();}
     public async Task<string> LoginIsolatedAsync()
     {
