@@ -6,11 +6,19 @@ using Forms = System.Windows.Forms;
 namespace CodexAccountBar;
 public partial class App : System.Windows.Application
 {
-    private Forms.NotifyIcon? _tray; private MainWindow? _window;
+    private Forms.NotifyIcon? _tray; private MainWindow? _window; private int _handlingUiException;
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
-        DispatcherUnhandledException += (_, args) => { AppLog.Error("UI thread", args.Exception); System.Windows.MessageBox.Show($"Codex Account Bar encountered an error.\n\nLog: {AppLog.CurrentFile}", "Codex Account Bar", MessageBoxButton.OK, MessageBoxImage.Error); args.Handled = true; };
+        DispatcherUnhandledException += (_, args) =>
+        {
+            AppLog.Error("UI thread", args.Exception);
+            args.Handled = true;
+            if (Interlocked.Exchange(ref _handlingUiException, 1) != 0) return;
+            try { System.Windows.MessageBox.Show($"Codex Account Bar encountered an error.\n\nLog: {AppLog.CurrentFile}", "Codex Account Bar", MessageBoxButton.OK, MessageBoxImage.Error); }
+            catch (Exception ex) { AppLog.Error("Error dialog", ex); }
+            finally { Interlocked.Exchange(ref _handlingUiException, 0); }
+        };
         AppDomain.CurrentDomain.UnhandledException += (_, args) => { if (args.ExceptionObject is Exception ex) AppLog.Error("Unhandled exception", ex); };
         TaskScheduler.UnobservedTaskException += (_, args) => { AppLog.Error("Background task", args.Exception); args.SetObserved(); };
         try
