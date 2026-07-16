@@ -5,9 +5,9 @@ Windows system-tray account switcher for Codex with an integrated 9Router on/off
 ## Features
 
 - Imports `%CODEX_HOME%\auth.json` (default `%USERPROFILE%\.codex\auth.json`).
-- Adds accounts through the official `codex login` browser flow in an isolated temporary home.
+- Adds accounts through the official `codex login` browser flow in an isolated temporary home; if the CLI is unavailable, imports the active Codex Desktop account.
 - Encrypts saved auth documents with Windows DPAPI (`CurrentUser`) in `%LOCALAPPDATA%\CodexAccountBar`.
-- Atomically switches `auth.json` and restarts an open Codex desktop window.
+- Atomically switches `auth.json` and restarts Codex Desktop through its Windows app identity.
 - Shows session/weekly quota when the usage endpoint is available.
 - Detects and toggles 9Router as a Windows service, Docker container named `9router`, or global npm CLI.
 
