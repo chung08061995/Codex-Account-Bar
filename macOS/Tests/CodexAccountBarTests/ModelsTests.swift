@@ -14,4 +14,10 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(profile.adapter, "anthropic")
         XCTAssertEqual(profile.defaultModel, "claude-sonnet-5")
     }
+
+    func testUsageWindowCalculatesRemainingQuota() {
+        let window = UsageWindow(usedPercent: 73, resetAt: nil, windowSeconds: 604_800)
+        XCTAssertEqual(window.remainingPercent, 27)
+        XCTAssertEqual(window.title, "Weekly")
+    }
 }

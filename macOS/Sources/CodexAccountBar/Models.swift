@@ -4,6 +4,26 @@ struct UsageWindow: Codable, Hashable {
     var usedPercent: Double?
     var resetAt: Double?
     var windowSeconds: Double?
+
+    var remainingPercent: Double {
+        max(0, min(100, 100 - (usedPercent ?? 0)))
+    }
+
+    var title: String {
+        guard let seconds = windowSeconds else { return "Quota" }
+        if seconds <= 6 * 60 * 60 { return "Session" }
+        if seconds <= 8 * 24 * 60 * 60 { return "Weekly" }
+        if seconds <= 35 * 24 * 60 * 60 { return "Monthly" }
+        return "Quota"
+    }
+
+    var resetText: String {
+        guard let resetAt else { return "Reset unknown" }
+        let date = resetAt > 1_200_000_000
+            ? Date(timeIntervalSince1970: resetAt)
+            : Date(timeIntervalSinceReferenceDate: resetAt)
+        return "Resets \(date.formatted(.relative(presentation: .numeric)))"
+    }
 }
 
 struct UsageSnapshot: Codable, Hashable {

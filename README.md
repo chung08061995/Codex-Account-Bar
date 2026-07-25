@@ -8,6 +8,8 @@ The macOS menu-bar app keeps the existing ChatGPT account switching workflow and
 adds provider profiles for opencodex:
 
 - Existing ChatGPT accounts remain in macOS Keychain.
+- Session/weekly quota is refreshed from Codex and displayed as both a ring and
+  horizontal progress bars, including reset time and credit balance.
 - Provider API keys are stored in a separate macOS Keychain service.
 - One click configures the selected provider, starts opencodex, syncs the model
   catalog, and restarts Codex.

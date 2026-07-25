@@ -43,7 +43,15 @@ struct ContentView: View {
                 Text("Accounts and model providers").font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            if store.isBusy {
+            Button {
+                Task { await store.refreshUsage() }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.plain)
+            .disabled(store.isBusy || store.isRefreshingUsage)
+            .help("Refresh quota")
+            if store.isBusy || store.isRefreshingUsage {
                 ProgressView().controlSize(.small)
             }
         }
@@ -68,19 +76,24 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(store.accounts) { account in
-                    HStack {
-                        statusDot(active: store.activeAccountID == account.id)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(account.displayName).lineLimit(1)
-                            Text(account.plan.uppercased())
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                    VStack(spacing: 10) {
+                        HStack {
+                            statusDot(active: store.activeAccountID == account.id)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(account.displayName).lineLimit(1)
+                                Text(account.plan.uppercased())
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button(store.activeAccountID == account.id ? "Active" : "Switch") {
+                                store.activateAccount(account)
+                            }
+                            .disabled(store.isBusy || store.activeAccountID == account.id)
                         }
-                        Spacer()
-                        Button(store.activeAccountID == account.id ? "Active" : "Switch") {
-                            store.activateAccount(account)
+                        if let usage = account.usage, let primary = usage.primary {
+                            UsageGrid(usage: usage, primary: primary)
                         }
-                        .disabled(store.isBusy || store.activeAccountID == account.id)
                     }
                     .padding(10)
                     .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
@@ -161,6 +174,96 @@ struct ContentView: View {
         Circle()
             .fill(active ? Color.green : Color.secondary.opacity(0.35))
             .frame(width: 8, height: 8)
+    }
+}
+
+private struct UsageGrid: View {
+    let usage: UsageSnapshot
+    let primary: UsageWindow
+
+    var body: some View {
+        HStack(spacing: 14) {
+            UsageRing(window: primary)
+            VStack(spacing: 9) {
+                UsageLine(window: primary)
+                if let secondary = usage.secondary {
+                    UsageLine(window: secondary)
+                }
+                if let balance = usage.creditsBalance, balance != "0" {
+                    HStack {
+                        Label("Credits", systemImage: "leaf")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text(balance).font(.caption2.monospacedDigit())
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct UsageRing: View {
+    let window: UsageWindow
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.secondary.opacity(0.18), lineWidth: 7)
+            Circle()
+                .trim(from: 0, to: window.remainingPercent / 100)
+                .stroke(
+                    quotaColor,
+                    style: StrokeStyle(lineWidth: 7, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+            VStack(spacing: -1) {
+                Text("\(Int(window.remainingPercent.rounded()))%")
+                    .font(.caption.weight(.bold).monospacedDigit())
+                Text("left")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 62, height: 62)
+        .accessibilityLabel("\(window.title) quota")
+        .accessibilityValue("\(Int(window.remainingPercent)) percent remaining")
+    }
+
+    private var quotaColor: Color {
+        if window.remainingPercent <= 10 { return .red }
+        if window.remainingPercent <= 25 { return .orange }
+        return .green
+    }
+}
+
+private struct UsageLine: View {
+    let window: UsageWindow
+
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack {
+                Text(window.title).font(.caption.weight(.medium))
+                Spacer()
+                Text("\(Int(window.remainingPercent.rounded()))% left")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            ProgressView(value: window.remainingPercent, total: 100)
+                .tint(quotaColor)
+            HStack {
+                Text(window.resetText)
+                Spacer()
+            }
+            .font(.system(size: 9))
+            .foregroundStyle(.tertiary)
+        }
+    }
+
+    private var quotaColor: Color {
+        if window.remainingPercent <= 10 { return .red }
+        if window.remainingPercent <= 25 { return .orange }
+        return .accentColor
     }
 }
 

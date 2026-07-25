@@ -9,6 +9,7 @@ final class AccountStore: ObservableObject {
     @Published var activeProviderID: UUID?
     @Published var statusText = "Ready"
     @Published var isBusy = false
+    @Published var isRefreshingUsage = false
     @Published var errorMessage: String?
 
     private let accountMetadataKey = "savedAccountMetadata.v1"
@@ -16,9 +17,11 @@ final class AccountStore: ObservableObject {
     private let activeProviderKey = "activeProviderID.v1"
     private let codexService = CodexService()
     private let providerService = ProviderService()
+    private let usageService = UsageService()
 
     init() {
         load()
+        Task { await refreshUsage(showErrors: false) }
     }
 
     func load() {
@@ -84,6 +87,51 @@ final class AccountStore: ObservableObject {
             }
             self.persistAccounts()
             self.statusText = "Added \(result.account.displayName)"
+        }
+    }
+
+    func refreshUsage(showErrors: Bool = true) async {
+        guard !isRefreshingUsage else { return }
+        isRefreshingUsage = true
+        if !isBusy { statusText = "Refreshing quota…" }
+        var failures: [String] = []
+        let service = usageService
+
+        await withTaskGroup(of: (String, Result<UsageSnapshot, Error>).self) { group in
+            for account in accounts {
+                group.addTask {
+                    do {
+                        guard let auth = try KeychainStore.read(
+                            service: KeychainStore.accountService,
+                            account: account.id
+                        ) else {
+                            throw AccountStoreError.missingCredentials(account.displayName)
+                        }
+                        return (account.id, .success(try await service.fetch(authData: auth)))
+                    } catch {
+                        return (account.id, .failure(error))
+                    }
+                }
+            }
+
+            for await (accountID, result) in group {
+                guard let index = accounts.firstIndex(where: { $0.id == accountID }) else { continue }
+                switch result {
+                case .success(let usage):
+                    accounts[index].usage = usage
+                case .failure(let error):
+                    failures.append(error.localizedDescription)
+                }
+            }
+        }
+
+        persistAccounts()
+        isRefreshingUsage = false
+        if !isBusy {
+            statusText = failures.isEmpty ? "Quota refreshed" : "Quota refreshed with \(failures.count) error(s)"
+        }
+        if showErrors, failures.count == accounts.count, let first = failures.first {
+            errorMessage = first
         }
     }
 
