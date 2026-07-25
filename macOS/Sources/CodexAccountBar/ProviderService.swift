@@ -14,6 +14,16 @@ final class ProviderService {
         let environment = try providerEnvironment(allProfiles)
         let keyReference = profile.requiresAPIKey ? "${\(environmentName(profile.id))}" : nil
 
+        status("Stopping previous opencodex…")
+        _ = try? await ProcessRunner.run(
+            ocx,
+            arguments: ["stop"],
+            environment: environment,
+            timeout: 20
+        )
+        proxyProcess?.terminate()
+        proxyProcess = nil
+
         status("Configuring \(profile.name)…")
         var arguments = ["provider", "add", profile.providerID]
         if !profile.registryProvider {
@@ -49,13 +59,6 @@ final class ProviderService {
         }
 
         status("Restarting opencodex…")
-        _ = try? await ProcessRunner.run(
-            ocx,
-            arguments: ["stop"],
-            environment: environment,
-            timeout: 20
-        )
-        proxyProcess?.terminate()
         proxyProcess = try ProcessRunner.launchDetached(
             ocx,
             arguments: ["start"],

@@ -16,7 +16,8 @@ adds provider profiles for opencodex:
 - Claudible uses its Codex Responses endpoint through opencodex with Codex
   identity headers, keeping the app's built-in `openai` history visible while
   routing namespaced `claudible/...` models. Its six Codex-compatible models are
-  added to the picker so selecting a model cannot silently fall back to OpenAI.
+  added to the picker after the previous proxy is stopped, preventing its stale
+  shutdown state from overwriting the new provider catalog.
 - Session/weekly quota is refreshed from Codex and displayed as both a ring and
   horizontal progress bars, including reset time and credit balance.
 - The active ChatGPT account's remaining quota is also shown as a compact ring
