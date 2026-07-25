@@ -45,6 +45,11 @@ enum CodexConfigEditor {
         return removingRootKey("model_provider", in: updated)
     }
 
+    static func removingDirectProvider(_ id: String, in content: String) -> String {
+        let withoutSelection = removingRootKey("model_provider", in: content)
+        return replacingSection("model_providers.\(id)", with: [], in: withoutSelection)
+    }
+
     static func setDirectProvider(
         id: String,
         name: String,
@@ -108,8 +113,9 @@ enum CodexConfigEditor {
             let end = lines[(start + 1)...].firstIndex(where: {
                 $0.trimmingCharacters(in: .whitespaces).hasPrefix("[")
             }) ?? lines.endIndex
-            lines.replaceSubrange(start..<end, with: block + [""])
+            lines.replaceSubrange(start..<end, with: block.isEmpty ? [] : block + [""])
         } else {
+            guard !block.isEmpty else { return content }
             while lines.last?.isEmpty == true { lines.removeLast() }
             lines += [""] + block + [""]
         }

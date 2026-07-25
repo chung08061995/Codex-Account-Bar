@@ -9,7 +9,7 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(accounts.first?.usage?.primary?.usedPercent, 42)
     }
 
-    func testClaudiblePresetUsesDirectResponsesEndpoint() {
+    func testClaudiblePresetUsesCodexResponsesEndpoint() {
         let profile = ProviderProfile.preset(.claudible)
         XCTAssertEqual(profile.adapter, "openai-responses")
         XCTAssertEqual(profile.baseURL, "https://claude.claudible.io/v1")
@@ -51,6 +51,9 @@ final class ModelsTests: XCTestCase {
         XCTAssertTrue(updated.contains("[profiles.work]\nmodel = \"gpt-5.5\""))
         let native = CodexConfigEditor.settingNativeModel("gpt-5.6-sol", in: updated)
         XCTAssertFalse(native.contains("model_provider = \"claudible\""))
+        let removed = CodexConfigEditor.removingDirectProvider("claudible", in: updated)
+        XCTAssertFalse(removed.contains("[model_providers.claudible]"))
+        XCTAssertFalse(removed.contains("test-key"))
     }
 
     func testUsageWindowCalculatesRemainingQuota() {

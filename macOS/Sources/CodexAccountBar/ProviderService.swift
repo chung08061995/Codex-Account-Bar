@@ -10,10 +10,6 @@ final class ProviderService {
         allProfiles: [ProviderProfile],
         status: @escaping @MainActor (String) -> Void
     ) async throws {
-        if profile.providerID == "claudible" {
-            try await activateDirectClaudible(profile, status: status)
-            return
-        }
         let ocx = try findOCX()
         let environment = try providerEnvironment(allProfiles)
         let keyReference = profile.requiresAPIKey ? "${\(environmentName(profile.id))}" : nil
@@ -36,6 +32,10 @@ final class ProviderService {
             timeout: 45
         )
         guard add.exitCode == 0 else { throw ProviderError.command(add.output) }
+        if profile.providerID == "claudible" {
+            try configureClaudibleHeaders()
+            try clearDirectCodexProvider(profile.providerID)
+        }
 
         if profile.requiresOAuth {
             status("Importing \(profile.name) login…")
@@ -107,37 +107,29 @@ final class ProviderService {
         }
     }
 
-    private func activateDirectClaudible(
-        _ profile: ProviderProfile,
-        status: @escaping @MainActor (String) -> Void
-    ) async throws {
-        guard let data = try KeychainStore.read(
-            service: KeychainStore.providerService,
-            account: profile.id.uuidString
-        ), let apiKey = String(data: data, encoding: .utf8), !apiKey.isEmpty else {
-            throw ProviderError.missingAPIKey(profile.name)
-        }
+    private func configureClaudibleHeaders() throws {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: ".opencodex/config.json")
+        let data = try Data(contentsOf: url)
+        guard var root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var providers = root["providers"] as? [String: Any],
+              var claudible = providers["claudible"] as? [String: Any]
+        else { throw ProviderError.invalidConfig }
+        claudible["headers"] = [
+            "User-Agent": "codex_cli_rs/0.146.0",
+            "originator": "codex_cli_rs"
+        ]
+        providers["claudible"] = claudible
+        root["providers"] = providers
+        let updated = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        try updated.write(to: url, options: .atomic)
+    }
 
-        status("Restoring direct Codex routing…")
-        if let ocx = try? findOCX() {
-            _ = try? await ProcessRunner.run(ocx, arguments: ["restore"], timeout: 25)
-        }
-        proxyProcess?.terminate()
-        proxyProcess = nil
-
+    private func clearDirectCodexProvider(_ providerID: String) throws {
         let content = (try? String(contentsOf: codexConfigURL, encoding: .utf8)) ?? ""
-        if let current = CodexConfigEditor.currentModel(in: content), !current.contains("/") {
-            UserDefaults.standard.set(current, forKey: nativeModelKey)
-        }
-        status("Selecting Claudible \(profile.defaultModel)…")
-        try CodexConfigEditor.setDirectProvider(
-            id: profile.providerID,
-            name: "Claudible",
-            baseURL: profile.baseURL,
-            bearerToken: apiKey,
-            model: profile.defaultModel,
-            at: codexConfigURL
-        )
+        let updated = CodexConfigEditor.removingDirectProvider(providerID, in: content)
+        guard updated != content else { return }
+        try updated.write(to: codexConfigURL, atomically: true, encoding: .utf8)
     }
 
     private func selectCodexModel(_ model: String) throws {
@@ -192,6 +184,7 @@ enum ProviderError: LocalizedError {
     case missingAPIKey(String)
     case command(String)
     case proxyDidNotStart
+    case invalidConfig
 
     var errorDescription: String? {
         switch self {
@@ -205,6 +198,8 @@ enum ProviderError: LocalizedError {
                 : output.trimmingCharacters(in: .whitespacesAndNewlines)
         case .proxyDidNotStart:
             "opencodex did not become healthy."
+        case .invalidConfig:
+            "The opencodex provider configuration is invalid."
         }
     }
 }
