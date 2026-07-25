@@ -74,6 +74,10 @@ final class CodexService {
         let running = NSRunningApplication.runningApplications(
             withBundleIdentifier: "com.openai.codex"
         )
+        let applicationURL = running.compactMap(\.bundleURL).first
+            ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")
+            ?? installedCodexURL()
+        guard let applicationURL else { throw CodexServiceError.appMissing }
         for app in running {
             app.terminate()
         }
@@ -83,9 +87,15 @@ final class CodexService {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         _ = try await NSWorkspace.shared.openApplication(
-            at: URL(fileURLWithPath: "/Applications/Codex.app"),
+            at: applicationURL.resolvingSymlinksInPath(),
             configuration: configuration
         )
+    }
+
+    private func installedCodexURL() -> URL? {
+        ["/Applications/ChatGPT.app", "/Applications/Codex.app"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+            .first { fileManager.fileExists(atPath: $0.path) }
     }
 
     private func canonicalJSON(_ data: Data?) -> Data? {
@@ -98,6 +108,7 @@ final class CodexService {
 
     private func findCodexCLI() throws -> URL {
         let candidates = [
+            "/Applications/ChatGPT.app/Contents/Resources/codex",
             "/Applications/Codex.app/Contents/Resources/codex",
             "/opt/homebrew/bin/codex",
             "/usr/local/bin/codex"
@@ -202,6 +213,7 @@ final class CodexService {
 
 enum CodexServiceError: LocalizedError {
     case cliMissing
+    case appMissing
     case loginFailed(String)
     case invalidAuth
 
@@ -209,6 +221,8 @@ enum CodexServiceError: LocalizedError {
         switch self {
         case .cliMissing:
             "Codex CLI was not found."
+        case .appMissing:
+            "Codex app was not found in /Applications."
         case .loginFailed(let output):
             output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? "Codex sign-in was cancelled or failed."
