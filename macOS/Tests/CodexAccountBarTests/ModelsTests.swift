@@ -66,4 +66,10 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(UsageWindow(usedPercent: 140).remainingPercent, 0)
         XCTAssertEqual(UsageWindow(usedPercent: -5).remainingPercent, 100)
     }
+
+    func testUsageWindowSupportsProviderTitle() {
+        let window = UsageWindow(usedPercent: 25, windowSeconds: 86_400, customTitle: "Daily")
+        XCTAssertEqual(window.title, "Daily")
+        XCTAssertEqual(window.remainingPercent, 75)
+    }
 }

@@ -125,29 +125,34 @@ struct ContentView: View {
                     .padding(.vertical, 8)
             } else {
                 ForEach(store.providers) { profile in
-                    HStack {
-                        statusDot(active: store.activeProviderID == profile.id)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(profile.name).lineLimit(1)
-                            Text("\(profile.providerID) · \(profile.defaultModel)")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        Spacer()
-                        Button(store.activeProviderID == profile.id ? "Reapply" : "Activate") {
-                            store.activateProvider(profile)
-                        }
-                        .disabled(store.isBusy)
-                        Menu {
-                            Button("Delete", role: .destructive) {
-                                store.deleteProvider(profile)
+                    VStack(spacing: 10) {
+                        HStack {
+                            statusDot(active: store.activeProviderID == profile.id)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(profile.name).lineLimit(1)
+                                Text("\(profile.providerID) · \(profile.defaultModel)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
                             }
-                        } label: {
-                            Image(systemName: "ellipsis.circle")
+                            Spacer()
+                            Button(store.activeProviderID == profile.id ? "Reapply" : "Activate") {
+                                store.activateProvider(profile)
+                            }
+                            .disabled(store.isBusy)
+                            Menu {
+                                Button("Delete", role: .destructive) {
+                                    store.deleteProvider(profile)
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis.circle")
+                            }
+                            .menuStyle(.borderlessButton)
+                            .frame(width: 24)
                         }
-                        .menuStyle(.borderlessButton)
-                        .frame(width: 24)
+                        if let usage = store.providerUsage[profile.id], let primary = usage.primary {
+                            UsageGrid(usage: usage, primary: primary)
+                        }
                     }
                     .padding(10)
                     .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))

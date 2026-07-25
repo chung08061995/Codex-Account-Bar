@@ -132,6 +132,26 @@ final class ProviderService {
         ]
         providers["claudible"] = claudible
         root["providers"] = providers
+        let modelNames = [
+            ("gpt-5.6-sol", "Claudible · GPT 5.6 Sol"),
+            ("gpt-5.6-terra", "Claudible · GPT 5.6 Terra"),
+            ("gpt-5.6-luna", "Claudible · GPT 5.6 Luna"),
+            ("gpt-5.5", "Claudible · GPT 5.5"),
+            ("gpt-5.4", "Claudible · GPT 5.4"),
+            ("gpt-5.4-mini", "Claudible · GPT 5.4 Mini")
+        ]
+        let existingModels = root["customModels"] as? [[String: Any]] ?? []
+        var customModels = existingModels.filter { ($0["provider"] as? String) != "claudible" }
+        customModels += modelNames.map { modelID, displayName in
+            var model = existingModels.first {
+                ($0["provider"] as? String) == "claudible" && ($0["modelId"] as? String) == modelID
+            } ?? [:]
+            model["provider"] = "claudible"
+            model["modelId"] = modelID
+            model["displayName"] = displayName
+            return model
+        }
+        root["customModels"] = customModels
         let updated = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         try updated.write(to: url, options: .atomic)
     }

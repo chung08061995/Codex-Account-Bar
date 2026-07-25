@@ -5,6 +5,7 @@ import SwiftUI
 final class AccountStore: ObservableObject {
     @Published private(set) var accounts: [SavedAccount] = []
     @Published private(set) var providers: [ProviderProfile] = []
+    @Published private(set) var providerUsage: [UUID: UsageSnapshot] = [:]
     @Published var activeAccountID: String?
     @Published var activeProviderID: UUID?
     @Published var statusText = "Ready"
@@ -19,10 +20,14 @@ final class AccountStore: ObservableObject {
     private let codexService = CodexService()
     private let providerService = ProviderService()
     private let usageService = UsageService()
+    private let providerUsageService = ProviderUsageService()
     private var addAccountTask: Task<Void, Never>?
 
     var activeQuotaWindow: UsageWindow? {
-        guard activeProviderID == nil, let activeAccountID else { return nil }
+        if let activeProviderID {
+            return providerUsage[activeProviderID]?.primary
+        }
+        guard let activeAccountID else { return nil }
         return accounts.first(where: { $0.id == activeAccountID })?.usage?.primary
     }
 
@@ -62,6 +67,7 @@ final class AccountStore: ObservableObject {
             }
             persistProviders()
             statusText = "Saved \(profile.name)"
+            Task { await refreshUsage(showErrors: false) }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -69,6 +75,7 @@ final class AccountStore: ObservableObject {
 
     func deleteProvider(_ profile: ProviderProfile) {
         providers.removeAll { $0.id == profile.id }
+        providerUsage.removeValue(forKey: profile.id)
         try? KeychainStore.delete(
             service: KeychainStore.providerService,
             account: profile.id.uuidString
@@ -129,6 +136,7 @@ final class AccountStore: ObservableObject {
         if !isBusy { statusText = "Refreshing quota…" }
         var failures: [String] = []
         let service = usageService
+        let externalService = providerUsageService
 
         await withTaskGroup(of: (String, Result<UsageSnapshot, Error>).self) { group in
             for account in accounts {
@@ -158,12 +166,39 @@ final class AccountStore: ObservableObject {
             }
         }
 
+        let quotaProviders = providers.filter { $0.providerID == "claudible" && $0.requiresAPIKey }
+        await withTaskGroup(of: (UUID, Result<UsageSnapshot, Error>).self) { group in
+            for profile in quotaProviders {
+                group.addTask {
+                    do {
+                        guard let data = try KeychainStore.read(
+                            service: KeychainStore.providerService,
+                            account: profile.id.uuidString
+                        ), let apiKey = String(data: data, encoding: .utf8), !apiKey.isEmpty else {
+                            throw AccountStoreError.missingCredentials(profile.name)
+                        }
+                        return (profile.id, .success(try await externalService.fetch(profile: profile, apiKey: apiKey)))
+                    } catch {
+                        return (profile.id, .failure(error))
+                    }
+                }
+            }
+
+            for await (providerID, result) in group {
+                switch result {
+                case .success(let usage): providerUsage[providerID] = usage
+                case .failure(let error): failures.append(error.localizedDescription)
+                }
+            }
+        }
+
         persistAccounts()
         isRefreshingUsage = false
         if !isBusy {
             statusText = failures.isEmpty ? "Quota refreshed" : "Quota refreshed with \(failures.count) error(s)"
         }
-        if showErrors, failures.count == accounts.count, let first = failures.first {
+        let targetCount = accounts.count + quotaProviders.count
+        if showErrors, targetCount > 0, failures.count == targetCount, let first = failures.first {
             errorMessage = first
         }
     }

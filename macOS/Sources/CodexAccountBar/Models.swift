@@ -4,12 +4,14 @@ struct UsageWindow: Codable, Hashable {
     var usedPercent: Double?
     var resetAt: Double?
     var windowSeconds: Double?
+    var customTitle: String?
 
     var remainingPercent: Double {
         max(0, min(100, 100 - (usedPercent ?? 0)))
     }
 
     var title: String {
+        if let customTitle, !customTitle.isEmpty { return customTitle }
         guard let seconds = windowSeconds else { return "Quota" }
         if seconds <= 6 * 60 * 60 { return "Session" }
         if seconds <= 8 * 24 * 60 * 60 { return "Weekly" }
