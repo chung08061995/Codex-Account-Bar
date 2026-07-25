@@ -135,10 +135,10 @@ struct ContentView: View {
                                 .lineLimit(1)
                         }
                         Spacer()
-                        Button(store.activeProviderID == profile.id ? "Active" : "Activate") {
+                        Button(store.activeProviderID == profile.id ? "Reapply" : "Activate") {
                             store.activateProvider(profile)
                         }
-                        .disabled(store.isBusy || store.activeProviderID == profile.id)
+                        .disabled(store.isBusy)
                         Menu {
                             Button("Delete", role: .destructive) {
                                 store.deleteProvider(profile)

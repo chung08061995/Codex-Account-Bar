@@ -36,7 +36,9 @@ final class AccountStore: ObservableObject {
             accounts = (try? JSONDecoder().decode([SavedAccount].self, from: data)) ?? []
         }
         if let data = UserDefaults.standard.data(forKey: providerMetadataKey) {
-            providers = (try? JSONDecoder().decode([ProviderProfile].self, from: data)) ?? []
+            let decoded = (try? JSONDecoder().decode([ProviderProfile].self, from: data)) ?? []
+            providers = decoded.map { $0.migrated() }
+            if providers != decoded { persistProviders() }
         }
         if let raw = UserDefaults.standard.string(forKey: activeProviderKey) {
             activeProviderID = UUID(uuidString: raw)

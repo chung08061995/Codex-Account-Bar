@@ -13,6 +13,9 @@ adds provider profiles for opencodex:
   temporary home.
 - Provider setup opens in a standalone window so API-key fields remain focused
   even after the menu-bar popover closes.
+- Activating Claudible uses its Codex Responses endpoint directly; other
+  providers select their namespaced opencodex model before restart. Active
+  providers can also be reapplied after editing their configuration.
 - Session/weekly quota is refreshed from Codex and displayed as both a ring and
   horizontal progress bars, including reset time and credit balance.
 - The active ChatGPT account's remaining quota is also shown as a compact ring

@@ -100,16 +100,32 @@ struct ProviderProfile: Codable, Identifiable, Hashable {
 
     var requiresAPIKey: Bool { authentication == "key" }
     var requiresOAuth: Bool { authentication == "oauth" }
+    var codexModelSlug: String {
+        guard !defaultModel.contains("/") else { return defaultModel }
+        return "\(providerID)/\(defaultModel)"
+    }
+
+    func migrated() -> ProviderProfile {
+        guard providerID == "claudible",
+              baseURL == "https://vip.claudible.io" || baseURL == "https://claudible.io/v1"
+        else { return self }
+        var copy = self
+        copy.name = "Claudible · GPT 5.6 Sol"
+        copy.adapter = "openai-responses"
+        copy.baseURL = "https://claude.claudible.io/v1"
+        copy.defaultModel = "gpt-5.6-sol"
+        return copy
+    }
 
     static func preset(_ preset: ProviderPreset) -> ProviderProfile {
         switch preset {
         case .claudible:
             ProviderProfile(
-                name: "Claudible · Sonnet 5",
+                name: "Claudible · GPT 5.6 Sol",
                 providerID: "claudible",
-                adapter: "anthropic",
-                baseURL: "https://vip.claudible.io",
-                defaultModel: "claude-sonnet-5",
+                adapter: "openai-responses",
+                baseURL: "https://claude.claudible.io/v1",
+                defaultModel: "gpt-5.6-sol",
                 registryProvider: false,
                 authentication: "key"
             )
