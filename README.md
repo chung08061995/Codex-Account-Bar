@@ -1,6 +1,35 @@
-# Codex Account Bar for Windows
+# Codex Account Bar
 
-Windows system-tray account switcher for Codex with an integrated 9Router on/off toggle.
+Account and provider switcher for Codex on macOS and Windows.
+
+## macOS
+
+The macOS menu-bar app keeps the existing ChatGPT account switching workflow and
+adds provider profiles for opencodex:
+
+- Existing ChatGPT accounts remain in macOS Keychain.
+- Provider API keys are stored in a separate macOS Keychain service.
+- One click configures the selected provider, starts opencodex, syncs the model
+  catalog, and restarts Codex.
+- Built-in presets are included for Claudible, Google Gemini, and Kiro, with a
+  generic custom-provider editor for future services.
+
+Build and test:
+
+```bash
+cd macOS
+chmod +x build-app.sh
+./build-app.sh
+```
+
+The app bundle is written to `macOS/dist/Codex Account Bar.app`.
+
+Claudible is configured through opencodex's Anthropic Messages adapter using
+`https://vip.claudible.io`. Gemini and Kiro use opencodex registry providers.
+Provider support ultimately depends on the upstream service and the installed
+opencodex version.
+
+## Windows
 
 ## Features
 

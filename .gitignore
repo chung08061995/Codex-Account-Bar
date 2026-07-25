@@ -7,3 +7,6 @@ artifacts/
 *.pfx
 *.snk
 .DS_Store
+macOS/.build/
+macOS/dist/
+.DS_Store
