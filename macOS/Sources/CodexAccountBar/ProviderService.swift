@@ -119,6 +119,14 @@ final class ProviderService {
             "User-Agent": "codex_cli_rs/0.146.0",
             "originator": "codex_cli_rs"
         ]
+        claudible["models"] = [
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.4-mini"
+        ]
         providers["claudible"] = claudible
         root["providers"] = providers
         let updated = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
