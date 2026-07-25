@@ -11,6 +11,8 @@ adds provider profiles for opencodex:
 - Browser sign-in can be cancelled from either the account header or footer;
   cancellation terminates the isolated `codex login` process and cleans up its
   temporary home.
+- Provider setup opens in a standalone window so API-key fields remain focused
+  even after the menu-bar popover closes.
 - Session/weekly quota is refreshed from Codex and displayed as both a ring and
   horizontal progress bars, including reset time and credit balance.
 - The active ChatGPT account's remaining quota is also shown as a compact ring

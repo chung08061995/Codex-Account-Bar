@@ -1,8 +1,8 @@
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var store: AccountStore
-    @State private var addProviderPresented = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,10 +19,6 @@ struct ContentView: View {
             footer
         }
         .frame(width: 430, height: 610)
-        .sheet(isPresented: $addProviderPresented) {
-            ProviderEditor()
-                .environmentObject(store)
-        }
         .alert("Codex Account Bar", isPresented: Binding(
             get: { store.errorMessage != nil },
             set: { if !$0 { store.errorMessage = nil } }
@@ -117,7 +113,7 @@ struct ContentView: View {
                 sectionTitle("Providers", icon: "server.rack")
                 Spacer()
                 Button {
-                    addProviderPresented = true
+                    ProviderWindowController.shared.show(store: store)
                 } label: {
                     Label("Add", systemImage: "plus")
                 }
@@ -285,12 +281,47 @@ private struct UsageLine: View {
     }
 }
 
+@MainActor
+private final class ProviderWindowController: NSObject, NSWindowDelegate {
+    static let shared = ProviderWindowController()
+
+    private var window: NSWindow?
+
+    func show(store: AccountStore) {
+        if let window {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let editor = ProviderEditor { [weak self] in
+            self?.window?.close()
+        }
+        .environmentObject(store)
+        let controller = NSHostingController(rootView: editor)
+        let window = NSWindow(contentViewController: controller)
+        window.title = "Add provider"
+        window.styleMask = [.titled, .closable, .miniaturizable]
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.center()
+        self.window = window
+
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        window = nil
+    }
+}
+
 private struct ProviderEditor: View {
     @EnvironmentObject private var store: AccountStore
-    @Environment(\.dismiss) private var dismiss
     @State private var preset: ProviderPreset = .claudible
     @State private var profile = ProviderProfile.preset(.claudible)
     @State private var apiKey = ""
+    let onClose: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -335,11 +366,11 @@ private struct ProviderEditor: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { onClose() }
                 Button("Save") {
                     profile.providerID = sanitizedProviderID(profile.providerID)
                     store.saveProvider(profile, apiKey: apiKey)
-                    dismiss()
+                    onClose()
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(
