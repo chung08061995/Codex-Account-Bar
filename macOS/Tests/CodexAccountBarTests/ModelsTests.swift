@@ -1,4 +1,5 @@
 import XCTest
+import SQLite3
 @testable import CodexAccountBar
 
 final class ModelsTests: XCTestCase {
@@ -71,5 +72,43 @@ final class ModelsTests: XCTestCase {
         let window = UsageWindow(usedPercent: 25, windowSeconds: 86_400, customTitle: "Daily")
         XCTAssertEqual(window.title, "Daily")
         XCTAssertEqual(window.remainingPercent, 75)
+    }
+
+    func testThreadModelsRouteAndRestoreWithoutTouchingExistingRoutedTask() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appending(path: "AccountBarThreadTest-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let databaseURL = home.appending(path: "state_5.sqlite")
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &database), SQLITE_OK)
+        guard let database else { return XCTFail("Could not create test database") }
+        defer { sqlite3_close(database) }
+        XCTAssertEqual(sqlite3_exec(database, "CREATE TABLE threads (id TEXT PRIMARY KEY, model_provider TEXT NOT NULL, model TEXT, created_at INTEGER NOT NULL)", nil, nil, nil), SQLITE_OK)
+        let old = Int64(Date().timeIntervalSince1970) - 60
+        XCTAssertEqual(sqlite3_exec(database, "INSERT INTO threads VALUES ('native', 'openai', 'gpt-5.5', \(old))", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(database, "INSERT INTO threads VALUES ('manual', 'openai', 'claudible/gpt-5.4', \(old))", nil, nil, nil), SQLITE_OK)
+
+        let service = ThreadModelService(codexHome: home)
+        try service.routeExistingThreads(to: "claudible/gpt-5.6-sol", providerID: "claudible")
+        XCTAssertEqual(try model("native", database: database), "claudible/gpt-5.6-sol")
+        XCTAssertEqual(try model("manual", database: database), "claudible/gpt-5.4")
+
+        let now = Int64(Date().timeIntervalSince1970) + 1
+        XCTAssertEqual(sqlite3_exec(database, "INSERT INTO threads VALUES ('new', 'openai', 'claudible/gpt-5.6-sol', \(now))", nil, nil, nil), SQLITE_OK)
+        try service.restoreNativeThreads()
+        XCTAssertEqual(try model("native", database: database), "gpt-5.5")
+        XCTAssertEqual(try model("new", database: database), "gpt-5.6-sol")
+        XCTAssertEqual(try model("manual", database: database), "claudible/gpt-5.4")
+    }
+
+    private func model(_ id: String, database: OpaquePointer) throws -> String? {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "SELECT model FROM threads WHERE id = ?", -1, &statement, nil) == SQLITE_OK,
+              let statement else { throw NSError(domain: "ModelsTests", code: 1) }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, id, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return sqlite3_column_text(statement, 0).map { String(cString: $0) }
     }
 }

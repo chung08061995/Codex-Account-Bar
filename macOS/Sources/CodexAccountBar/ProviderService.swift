@@ -4,6 +4,7 @@ import Foundation
 final class ProviderService {
     private var proxyProcess: Process?
     private let nativeModelKey = "nativeCodexModel.v1"
+    private let threadModelService = ThreadModelService()
 
     func activate(
         profile: ProviderProfile,
@@ -92,12 +93,18 @@ final class ProviderService {
         if !profile.defaultModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             status("Selecting \(profile.defaultModel)…")
             try selectCodexModel(profile.codexModelSlug)
+            status("Applying \(profile.name) to existing tasks…")
+            try threadModelService.routeExistingThreads(
+                to: profile.codexModelSlug,
+                providerID: profile.providerID
+            )
         }
     }
 
     func activateNativeOpenAI(status: @escaping @MainActor (String) -> Void) async {
         guard let ocx = try? findOCX() else { return }
         status("Restoring native Codex…")
+        try? threadModelService.restoreNativeThreads()
         _ = try? await ProcessRunner.run(
             ocx,
             arguments: ["restore"],
