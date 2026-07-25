@@ -10,6 +10,8 @@ adds provider profiles for opencodex:
 - Existing ChatGPT accounts remain in macOS Keychain.
 - Session/weekly quota is refreshed from Codex and displayed as both a ring and
   horizontal progress bars, including reset time and credit balance.
+- The active ChatGPT account's remaining quota is also shown as a compact ring
+  and percentage directly in the macOS menu bar.
 - Provider API keys are stored in a separate macOS Keychain service.
 - One click configures the selected provider, starts opencodex, syncs the model
   catalog, and restarts Codex.

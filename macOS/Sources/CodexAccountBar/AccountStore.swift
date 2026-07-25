@@ -19,6 +19,11 @@ final class AccountStore: ObservableObject {
     private let providerService = ProviderService()
     private let usageService = UsageService()
 
+    var activeQuotaWindow: UsageWindow? {
+        guard activeProviderID == nil, let activeAccountID else { return nil }
+        return accounts.first(where: { $0.id == activeAccountID })?.usage?.primary
+    }
+
     init() {
         load()
         Task { await refreshUsage(showErrors: false) }

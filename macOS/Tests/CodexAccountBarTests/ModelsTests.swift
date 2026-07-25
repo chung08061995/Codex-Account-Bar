@@ -20,4 +20,9 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(window.remainingPercent, 27)
         XCTAssertEqual(window.title, "Weekly")
     }
+
+    func testUsageWindowClampsRemainingQuota() {
+        XCTAssertEqual(UsageWindow(usedPercent: 140).remainingPercent, 0)
+        XCTAssertEqual(UsageWindow(usedPercent: -5).remainingPercent, 100)
+    }
 }
