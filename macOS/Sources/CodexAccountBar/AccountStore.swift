@@ -9,6 +9,7 @@ final class AccountStore: ObservableObject {
     @Published var activeProviderID: UUID?
     @Published var statusText = "Ready"
     @Published var isBusy = false
+    @Published var isAddingAccount = false
     @Published var isRefreshingUsage = false
     @Published var errorMessage: String?
 
@@ -18,6 +19,7 @@ final class AccountStore: ObservableObject {
     private let codexService = CodexService()
     private let providerService = ProviderService()
     private let usageService = UsageService()
+    private var addAccountTask: Task<Void, Never>?
 
     var activeQuotaWindow: UsageWindow? {
         guard activeProviderID == nil, let activeAccountID else { return nil }
@@ -77,22 +79,46 @@ final class AccountStore: ObservableObject {
     }
 
     func addAccount() {
-        perform {
-            self.statusText = "Complete sign-in in your browser…"
-            let result = try await self.codexService.loginIsolated()
-            try KeychainStore.write(
-                result.authData,
-                service: KeychainStore.accountService,
-                account: result.account.id
-            )
-            if let index = self.accounts.firstIndex(where: { $0.id == result.account.id }) {
-                self.accounts[index] = result.account
-            } else {
-                self.accounts.append(result.account)
+        guard !isBusy else { return }
+        isBusy = true
+        isAddingAccount = true
+        errorMessage = nil
+        statusText = "Complete sign-in in your browser…"
+        addAccountTask = Task {
+            defer {
+                isBusy = false
+                isAddingAccount = false
+                addAccountTask = nil
             }
-            self.persistAccounts()
-            self.statusText = "Added \(result.account.displayName)"
+            do {
+                let result = try await codexService.loginIsolated()
+                try Task.checkCancellation()
+                try KeychainStore.write(
+                    result.authData,
+                    service: KeychainStore.accountService,
+                    account: result.account.id
+                )
+                if let index = accounts.firstIndex(where: { $0.id == result.account.id }) {
+                    accounts[index] = result.account
+                } else {
+                    accounts.append(result.account)
+                }
+                persistAccounts()
+                statusText = "Added \(result.account.displayName)"
+            } catch is CancellationError {
+                statusText = "Sign-in cancelled"
+            } catch {
+                errorMessage = error.localizedDescription
+                statusText = "Sign-in failed"
+            }
         }
+    }
+
+    func cancelAddAccount() {
+        guard isAddingAccount else { return }
+        statusText = "Cancelling sign-in…"
+        codexService.cancelLogin()
+        addAccountTask?.cancel()
     }
 
     func refreshUsage(showErrors: Bool = true) async {

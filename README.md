@@ -8,6 +8,9 @@ The macOS menu-bar app keeps the existing ChatGPT account switching workflow and
 adds provider profiles for opencodex:
 
 - Existing ChatGPT accounts remain in macOS Keychain.
+- Browser sign-in can be cancelled from either the account header or footer;
+  cancellation terminates the isolated `codex login` process and cleans up its
+  temporary home.
 - Session/weekly quota is refreshed from Codex and displayed as both a ring and
   horizontal progress bars, including reset time and credit balance.
 - The active ChatGPT account's remaining quota is also shown as a compact ring

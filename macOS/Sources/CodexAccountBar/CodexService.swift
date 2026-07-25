@@ -4,6 +4,8 @@ import Foundation
 @MainActor
 final class CodexService {
     private let fileManager = FileManager.default
+    private var loginProcess: Process?
+    private var loginWasCancelled = false
 
     var codexHome: URL {
         if let custom = ProcessInfo.processInfo.environment["CODEX_HOME"], !custom.isEmpty {
@@ -47,18 +49,25 @@ final class CodexService {
 
         var environment = ProcessInfo.processInfo.environment
         environment["CODEX_HOME"] = temporaryHome.path
-        let result = try await ProcessRunner.run(
+        let result = try await runLoginProcess(
             executable,
             arguments: ["login", "-c", "cli_auth_credentials_store=\"file\""],
-            environment: environment,
-            timeout: 600
+            environment: environment
         )
+        try Task.checkCancellation()
         let authURL = temporaryHome.appending(path: "auth.json")
         guard result.exitCode == 0, fileManager.fileExists(atPath: authURL.path) else {
             throw CodexServiceError.loginFailed(result.output)
         }
         let authData = try Data(contentsOf: authURL)
         return (try accountMetadata(from: authData), authData)
+    }
+
+    func cancelLogin() {
+        loginWasCancelled = true
+        if let loginProcess, loginProcess.isRunning {
+            loginProcess.terminate()
+        }
     }
 
     func restartCodex() async throws {
@@ -97,6 +106,56 @@ final class CodexService {
             throw CodexServiceError.cliMissing
         }
         return URL(fileURLWithPath: path)
+    }
+
+    private func runLoginProcess(
+        _ executable: URL,
+        arguments: [String],
+        environment: [String: String]
+    ) async throws -> ProcessResult {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.environment = environment
+        process.standardOutput = pipe
+        process.standardError = pipe
+        loginProcess = process
+        loginWasCancelled = false
+
+        let timeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(600))
+            guard let self, process.isRunning else { return }
+            self.loginProcess?.terminate()
+        }
+        defer {
+            timeoutTask.cancel()
+            loginProcess = nil
+        }
+
+        let result = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                process.terminationHandler = { process in
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    continuation.resume(returning: ProcessResult(
+                        exitCode: process.terminationStatus,
+                        output: String(decoding: data, as: UTF8.self)
+                    ))
+                }
+                do {
+                    try process.run()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.cancelLogin() }
+        }
+
+        if loginWasCancelled || Task.isCancelled {
+            throw CancellationError()
+        }
+        return result
     }
 
     private func accountMetadata(from authData: Data) throws -> SavedAccount {

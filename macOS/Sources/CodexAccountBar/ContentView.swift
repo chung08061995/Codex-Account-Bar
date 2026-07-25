@@ -63,12 +63,21 @@ struct ContentView: View {
             HStack {
                 sectionTitle("ChatGPT accounts", icon: "person.2")
                 Spacer()
-                Button {
-                    store.addAccount()
-                } label: {
-                    Label("Add", systemImage: "plus")
+                if store.isAddingAccount {
+                    Button(role: .cancel) {
+                        store.cancelAddAccount()
+                    } label: {
+                        Label("Cancel", systemImage: "xmark")
+                    }
+                    .tint(.red)
+                } else {
+                    Button {
+                        store.addAccount()
+                    } label: {
+                        Label("Add", systemImage: "plus")
+                    }
+                    .disabled(store.isBusy)
                 }
-                .disabled(store.isBusy)
             }
             if store.accounts.isEmpty {
                 Text("No saved accounts found.")
@@ -158,9 +167,18 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer()
-            Button("Quit") { NSApplication.shared.terminate(nil) }
+            if store.isAddingAccount {
+                Button("Cancel sign-in", role: .cancel) {
+                    store.cancelAddAccount()
+                }
                 .buttonStyle(.plain)
-                .font(.caption)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.red)
+            } else {
+                Button("Quit") { NSApplication.shared.terminate(nil) }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+            }
         }
         .padding(12)
     }
