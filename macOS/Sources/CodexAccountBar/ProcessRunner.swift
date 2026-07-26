@@ -6,6 +6,20 @@ struct ProcessResult {
 }
 
 enum ProcessRunner {
+    static func preparedEnvironment(_ environment: [String: String]) -> [String: String] {
+        var prepared = environment
+        var paths = (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
+            .split(separator: ":")
+            .map(String.init)
+
+        for path in ["/opt/homebrew/bin", "/usr/local/bin"] where !paths.contains(path) {
+            paths.append(path)
+        }
+
+        prepared["PATH"] = paths.joined(separator: ":")
+        return prepared
+    }
+
     static func run(
         _ executable: URL,
         arguments: [String],
@@ -17,7 +31,7 @@ enum ProcessRunner {
             let pipe = Pipe()
             process.executableURL = executable
             process.arguments = arguments
-            process.environment = environment
+            process.environment = preparedEnvironment(environment)
             process.standardOutput = pipe
             process.standardError = pipe
 
@@ -53,7 +67,7 @@ enum ProcessRunner {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
-        process.environment = environment
+        process.environment = preparedEnvironment(environment)
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
