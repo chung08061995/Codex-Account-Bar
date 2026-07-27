@@ -4,10 +4,16 @@ import Foundation
 @MainActor
 final class CodexService {
     private let fileManager = FileManager.default
+    private let configuredCodexHome: URL?
     private var loginProcess: Process?
     private var loginWasCancelled = false
 
+    init(codexHome: URL? = nil) {
+        configuredCodexHome = codexHome
+    }
+
     var codexHome: URL {
+        if let configuredCodexHome { return configuredCodexHome }
         if let custom = ProcessInfo.processInfo.environment["CODEX_HOME"], !custom.isEmpty {
             return URL(fileURLWithPath: custom, isDirectory: true)
         }

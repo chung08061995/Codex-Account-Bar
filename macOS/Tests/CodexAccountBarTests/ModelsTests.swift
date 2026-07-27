@@ -3,6 +3,28 @@ import SQLite3
 @testable import CodexAccountBar
 
 final class ModelsTests: XCTestCase {
+    @MainActor
+    func testSwitchingSeveralAccountsKeepsTheFinalAuthDocument() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appending(path: "AccountBarSwitchTest-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let service = CodexService(codexHome: home)
+        let accounts = ["account-a", "account-b", "account-c"]
+
+        for accountID in accounts {
+            let auth = try JSONSerialization.data(withJSONObject: [
+                "tokens": ["account_id": accountID],
+                "OPENAI_API_KEY": NSNull()
+            ], options: [.sortedKeys])
+            try service.activateAccount(authData: auth)
+        }
+
+        let active = try JSONSerialization.jsonObject(with: Data(contentsOf: service.authURL)) as? [String: Any]
+        let tokens = active?["tokens"] as? [String: Any]
+        XCTAssertEqual(tokens?["account_id"] as? String, "account-c")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: home.appending(path: "auth.json.cab.tmp").path))
+    }
+
     func testLegacyAccountMetadataDecodes() throws {
         let data = Data(#"[{"id":"abc","email":"user@example.com","plan":"plus","label":"","usage":{"primary":{"usedPercent":42}}}]"#.utf8)
         let accounts = try JSONDecoder().decode([SavedAccount].self, from: data)
@@ -100,6 +122,17 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(try model("native", database: database), "gpt-5.5")
         XCTAssertEqual(try model("new", database: database), "gpt-5.6-sol")
         XCTAssertEqual(try model("manual", database: database), "claudible/gpt-5.4")
+
+        // Repeated native-account switches must be harmless, and applying the
+        // provider again must route the currently native threads once more.
+        try service.restoreNativeThreads()
+        try service.routeExistingThreads(to: "claudible/gpt-5.6-sol", providerID: "claudible")
+        XCTAssertEqual(try model("native", database: database), "claudible/gpt-5.6-sol")
+        XCTAssertEqual(try model("new", database: database), "claudible/gpt-5.6-sol")
+        XCTAssertEqual(try model("manual", database: database), "claudible/gpt-5.4")
+        try service.restoreNativeThreads()
+        XCTAssertEqual(try model("native", database: database), "gpt-5.5")
+        XCTAssertEqual(try model("new", database: database), "gpt-5.6-sol")
     }
 
     private func model(_ id: String, database: OpaquePointer) throws -> String? {
