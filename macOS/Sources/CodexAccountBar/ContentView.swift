@@ -28,24 +28,6 @@ struct ContentView: View {
         } message: {
             Text(store.errorMessage ?? "")
         }
-        .confirmationDialog(
-            "Remove saved account?",
-            isPresented: Binding(
-                get: { accountToDelete != nil },
-                set: { if !$0 { accountToDelete = nil } }
-            ),
-            presenting: accountToDelete
-        ) { account in
-            Button("Remove \(account.displayName)", role: .destructive) {
-                store.deleteAccount(account)
-                accountToDelete = nil
-            }
-            Button("Cancel", role: .cancel) {
-                accountToDelete = nil
-            }
-        } message: { _ in
-            Text("This removes the saved account and its stored credential from Codex Account Bar. It does not log out the Codex app.")
-        }
     }
 
     private var header: some View {
@@ -110,18 +92,30 @@ struct ContentView: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Button(store.activeAccountID == account.id ? "Active" : "Switch") {
-                                store.activateAccount(account)
-                            }
-                            .disabled(store.isBusy || store.activeAccountID == account.id)
-                            Menu {
-                                Button("Remove Account", role: .destructive) {
-                                    accountToDelete = account
+                            if accountToDelete?.id == account.id {
+                                Button("Cancel") {
+                                    accountToDelete = nil
                                 }
-                            } label: {
-                                Image(systemName: "ellipsis.circle")
+                                Button("Remove", role: .destructive) {
+                                    store.deleteAccount(account)
+                                    accountToDelete = nil
+                                }
+                                .help("Remove this saved account from Codex Account Bar")
+                            } else {
+                                Button(store.activeAccountID == account.id ? "Active" : "Switch") {
+                                    store.activateAccount(account)
+                                }
+                                .disabled(store.isBusy || store.activeAccountID == account.id)
+                                Button {
+                                    accountToDelete = account
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.red)
+                                .disabled(store.isBusy)
+                                .help("Remove saved account")
                             }
-                            .menuStyle(.borderlessButton)
                         }
                         if let usage = account.usage, let primary = usage.primary {
                             UsageGrid(usage: usage, primary: primary)
