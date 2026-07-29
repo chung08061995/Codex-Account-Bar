@@ -22,6 +22,9 @@ final class AccountStore: ObservableObject {
     private let usageService = UsageService()
     private let providerUsageService = ProviderUsageService()
     private var addAccountTask: Task<Void, Never>?
+    private var refreshLoopTask: Task<Void, Never>?
+
+    private let automaticRefreshInterval: UInt64 = 10 * 60 * 1_000_000_000
 
     var activeQuotaWindow: UsageWindow? {
         if let activeProviderID {
@@ -34,6 +37,30 @@ final class AccountStore: ObservableObject {
     init() {
         load()
         Task { await refreshUsage(showErrors: false) }
+        refreshLoopTask = Task { [weak self] in
+            var nextDelay = self?.automaticRefreshInterval ?? 0
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: nextDelay)
+                } catch {
+                    break
+                }
+                guard let self else { break }
+                let succeeded = await self.refreshUsage(showErrors: false)
+                if succeeded {
+                    nextDelay = self.automaticRefreshInterval
+                } else {
+                    let retryDelay = nextDelay == self.automaticRefreshInterval
+                        ? 2 * 60 * 1_000_000_000
+                        : nextDelay * 2
+                    nextDelay = min(retryDelay, 30 * 60 * 1_000_000_000)
+                }
+            }
+        }
+    }
+
+    deinit {
+        refreshLoopTask?.cancel()
     }
 
     func load() {
@@ -87,6 +114,19 @@ final class AccountStore: ObservableObject {
         persistProviders()
     }
 
+    func deleteAccount(_ account: SavedAccount) {
+        accounts.removeAll { $0.id == account.id }
+        try? KeychainStore.delete(
+            service: KeychainStore.accountService,
+            account: account.id
+        )
+        if activeAccountID == account.id {
+            activeAccountID = nil
+        }
+        persistAccounts()
+        statusText = "Removed \(account.displayName)"
+    }
+
     func addAccount() {
         guard !isBusy else { return }
         isBusy = true
@@ -130,8 +170,8 @@ final class AccountStore: ObservableObject {
         addAccountTask?.cancel()
     }
 
-    func refreshUsage(showErrors: Bool = true) async {
-        guard !isRefreshingUsage else { return }
+    func refreshUsage(showErrors: Bool = true) async -> Bool {
+        guard !isRefreshingUsage else { return false }
         isRefreshingUsage = true
         if !isBusy { statusText = "Refreshing quota…" }
         var failures: [String] = []
@@ -201,6 +241,7 @@ final class AccountStore: ObservableObject {
         if showErrors, targetCount > 0, failures.count == targetCount, let first = failures.first {
             errorMessage = first
         }
+        return failures.isEmpty
     }
 
     func activateAccount(_ account: SavedAccount) {
@@ -219,6 +260,7 @@ final class AccountStore: ObservableObject {
             self.activeAccountID = account.id
             self.statusText = "Restarting Codex…"
             try await self.codexService.restartCodex()
+            _ = await self.refreshUsage(showErrors: false)
             self.statusText = "Using \(account.displayName)"
         }
     }
@@ -234,6 +276,7 @@ final class AccountStore: ObservableObject {
             UserDefaults.standard.set(profile.id.uuidString, forKey: self.activeProviderKey)
             self.statusText = "Restarting Codex…"
             try await self.codexService.restartCodex()
+            _ = await self.refreshUsage(showErrors: false)
             self.statusText = "Using \(profile.name)"
         }
     }

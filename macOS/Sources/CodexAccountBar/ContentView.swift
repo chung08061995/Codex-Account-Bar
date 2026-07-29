@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var store: AccountStore
+    @State private var accountToDelete: SavedAccount?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -91,10 +92,30 @@ struct ContentView: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Button(store.activeAccountID == account.id ? "Active" : "Switch") {
-                                store.activateAccount(account)
+                            if accountToDelete?.id == account.id {
+                                Button("Cancel") {
+                                    accountToDelete = nil
+                                }
+                                Button("Remove", role: .destructive) {
+                                    store.deleteAccount(account)
+                                    accountToDelete = nil
+                                }
+                                .help("Remove this saved account from Codex Account Bar")
+                            } else {
+                                Button(store.activeAccountID == account.id ? "Active" : "Switch") {
+                                    store.activateAccount(account)
+                                }
+                                .disabled(store.isBusy || store.activeAccountID == account.id)
+                                Button {
+                                    accountToDelete = account
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.red)
+                                .disabled(store.isBusy)
+                                .help("Remove saved account")
                             }
-                            .disabled(store.isBusy || store.activeAccountID == account.id)
                         }
                         if let usage = account.usage, let primary = usage.primary {
                             UsageGrid(usage: usage, primary: primary)
