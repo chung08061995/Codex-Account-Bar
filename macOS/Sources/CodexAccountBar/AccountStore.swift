@@ -114,6 +114,19 @@ final class AccountStore: ObservableObject {
         persistProviders()
     }
 
+    func deleteAccount(_ account: SavedAccount) {
+        accounts.removeAll { $0.id == account.id }
+        try? KeychainStore.delete(
+            service: KeychainStore.accountService,
+            account: account.id
+        )
+        if activeAccountID == account.id {
+            activeAccountID = nil
+        }
+        persistAccounts()
+        statusText = "Removed \(account.displayName)"
+    }
+
     func addAccount() {
         guard !isBusy else { return }
         isBusy = true

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var store: AccountStore
+    @State private var accountToDelete: SavedAccount?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,6 +27,24 @@ struct ContentView: View {
             Button("OK", role: .cancel) { store.errorMessage = nil }
         } message: {
             Text(store.errorMessage ?? "")
+        }
+        .confirmationDialog(
+            "Remove saved account?",
+            isPresented: Binding(
+                get: { accountToDelete != nil },
+                set: { if !$0 { accountToDelete = nil } }
+            ),
+            presenting: accountToDelete
+        ) { account in
+            Button("Remove \(account.displayName)", role: .destructive) {
+                store.deleteAccount(account)
+                accountToDelete = nil
+            }
+            Button("Cancel", role: .cancel) {
+                accountToDelete = nil
+            }
+        } message: { _ in
+            Text("This removes the saved account and its stored credential from Codex Account Bar. It does not log out the Codex app.")
         }
     }
 
@@ -95,6 +114,14 @@ struct ContentView: View {
                                 store.activateAccount(account)
                             }
                             .disabled(store.isBusy || store.activeAccountID == account.id)
+                            Menu {
+                                Button("Remove Account", role: .destructive) {
+                                    accountToDelete = account
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis.circle")
+                            }
+                            .menuStyle(.borderlessButton)
                         }
                         if let usage = account.usage, let primary = usage.primary {
                             UsageGrid(usage: usage, primary: primary)
