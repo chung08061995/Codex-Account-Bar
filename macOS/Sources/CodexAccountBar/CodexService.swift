@@ -84,18 +84,22 @@ final class CodexService {
             ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")
             ?? installedCodexURL()
         guard let applicationURL else { throw CodexServiceError.appMissing }
-        for app in running {
-            app.terminate()
+        let targets = running.map { app in
+            RestartTarget(
+                terminate: { _ = app.terminate() },
+                forceTerminate: { _ = app.forceTerminate() },
+                isTerminated: { app.isTerminated }
+            )
         }
-        if !running.isEmpty {
-            try await Task.sleep(for: .milliseconds(900))
+        try await ApplicationRestartCoordinator().restart(targets: targets) {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            configuration.createsNewApplicationInstance = true
+            _ = try await NSWorkspace.shared.openApplication(
+                at: applicationURL.resolvingSymlinksInPath(),
+                configuration: configuration
+            )
         }
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = true
-        _ = try await NSWorkspace.shared.openApplication(
-            at: applicationURL.resolvingSymlinksInPath(),
-            configuration: configuration
-        )
     }
 
     private func installedCodexURL() -> URL? {
