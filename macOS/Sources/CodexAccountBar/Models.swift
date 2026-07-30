@@ -24,7 +24,9 @@ struct UsageWindow: Codable, Hashable {
         let date = resetAt > 1_200_000_000
             ? Date(timeIntervalSince1970: resetAt)
             : Date(timeIntervalSinceReferenceDate: resetAt)
-        return "Resets \(date.formatted(.relative(presentation: .numeric)))"
+        let timestamp = date.formatted(date: .abbreviated, time: .shortened)
+        let relative = date.formatted(.relative(presentation: .numeric))
+        return "Resets \(timestamp) (\(relative))"
     }
 }
 
