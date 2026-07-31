@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 namespace CodexAccountBar.Services;
 
 public sealed record RecoverableCodexTask(string Id, string Title, string WorkingDirectory);
-public sealed record CodexTaskRecoveryResult(int Attempted, int Succeeded, IReadOnlyList<string> Failures);
+public sealed record CodexTaskRecoveryResult(int Attempted, int Started, IReadOnlyList<string> Failures);
 
 public sealed class CodexTaskRecoveryService(string codexHome, string codexExecutable)
 {
@@ -21,35 +21,33 @@ public sealed class CodexTaskRecoveryService(string codexHome, string codexExecu
         );
     }
 
-    public async Task<CodexTaskRecoveryResult> ResumeAsync(
+    public Task<CodexTaskRecoveryResult> ResumeAsync(
         IReadOnlyList<RecoverableCodexTask> tasks
     )
     {
-        var succeeded = 0;
+        var started = 0;
         var failures = new List<string>();
         const string prompt = "The previous account ran out of Codex quota. Continue this task from where it stopped. Preserve existing work, finish the original objective, and verify the result before stopping.";
         foreach (var task in tasks)
         {
             try
             {
-                var result = await ProcessRunner.RunAsync(
+                ProcessRunner.LaunchDetached(
                     codexExecutable,
                     ["exec", "resume", "--skip-git-repo-check", task.Id, prompt],
-                    timeout: 6 * 60 * 60 * 1000,
                     env: new Dictionary<string, string?> { ["CODEX_HOME"] = codexHome },
                     workingDirectory: Directory.Exists(task.WorkingDirectory)
                         ? task.WorkingDirectory
                         : null
                 );
-                if (result.ExitCode == 0) succeeded++;
-                else failures.Add($"{task.Title}: Codex exited with code {result.ExitCode}");
+                started++;
             }
             catch (Exception exception)
             {
                 failures.Add($"{task.Title}: {exception.Message}");
             }
         }
-        return new CodexTaskRecoveryResult(tasks.Count, succeeded, failures);
+        return Task.FromResult(new CodexTaskRecoveryResult(tasks.Count, started, failures));
     }
 
     private sealed class AppServerProbe : IAsyncDisposable

@@ -8,7 +8,7 @@ struct RecoverableCodexTask: Sendable, Hashable {
 
 struct CodexTaskRecoveryResult: Sendable {
     let attempted: Int
-    let succeeded: Int
+    let started: Int
     let failures: [String]
 }
 
@@ -37,9 +37,9 @@ struct CodexTaskRecoveryService: Sendable {
 
     func resume(_ tasks: [RecoverableCodexTask]) async -> CodexTaskRecoveryResult {
         guard !tasks.isEmpty else {
-            return CodexTaskRecoveryResult(attempted: 0, succeeded: 0, failures: [])
+            return CodexTaskRecoveryResult(attempted: 0, started: 0, failures: [])
         }
-        var succeeded = 0
+        var started = 0
         var failures: [String] = []
         var environment = ProcessInfo.processInfo.environment
         environment["CODEX_HOME"] = codexHome.path
@@ -48,29 +48,23 @@ struct CodexTaskRecoveryService: Sendable {
         for task in tasks {
             do {
                 let directory = URL(fileURLWithPath: task.workingDirectory, isDirectory: true)
-                let result = try await ProcessRunner.run(
+                _ = try ProcessRunner.launchDetached(
                     codexExecutable,
                     arguments: [
                         "exec", "resume", "--skip-git-repo-check",
                         task.id, prompt
                     ],
                     environment: environment,
-                    currentDirectoryURL: directory,
-                    captureOutput: false,
-                    timeout: 6 * 60 * 60
+                    currentDirectoryURL: directory
                 )
-                if result.exitCode == 0 {
-                    succeeded += 1
-                } else {
-                    failures.append("\(task.title): Codex exited with code \(result.exitCode)")
-                }
+                started += 1
             } catch {
                 failures.append("\(task.title): \(error.localizedDescription)")
             }
         }
         return CodexTaskRecoveryResult(
             attempted: tasks.count,
-            succeeded: succeeded,
+            started: started,
             failures: failures
         )
     }

@@ -437,7 +437,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 var result = new CodexTaskRecoveryResult(0, 0, []);
                 if (recovery is not null && tasks.Count > 0)
                 {
-                    Message = $"Continuing {tasks.Count} task(s) on {candidate.Email}…";
+                    Message = $"Starting {tasks.Count} stopped task(s) on {candidate.Email}…";
                     result = await recovery.ResumeAsync(tasks);
                 }
                 if (!await _codex.LaunchAsync(launchTarget))
@@ -450,8 +450,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     : result.Failures.Count == 0
                         ? tasks.Count == 0
                             ? $"Switched to {candidate.Email}."
-                            : $"Switched account; continued {result.Succeeded} task(s)."
-                        : $"Switched account; continued {result.Succeeded}/{result.Attempted} task(s).";
+                            : $"Switched account; started {result.Started} task(s)."
+                        : $"Switched account; started {result.Started}/{result.Attempted} task(s).";
                 if (result.Failures.Count > 0) AppLog.Error("Resume quota-limited tasks", new AggregateException(result.Failures.Select(message => new Exception(message))));
             }
             catch

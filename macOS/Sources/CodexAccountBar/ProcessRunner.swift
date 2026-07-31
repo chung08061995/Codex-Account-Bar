@@ -65,12 +65,14 @@ enum ProcessRunner {
     static func launchDetached(
         _ executable: URL,
         arguments: [String],
-        environment: [String: String]
+        environment: [String: String],
+        currentDirectoryURL: URL? = nil
     ) throws -> Process {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
         process.environment = preparedEnvironment(environment)
+        process.currentDirectoryURL = currentDirectoryURL
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()

@@ -454,11 +454,11 @@ final class AccountStore: ObservableObject {
 
                 var recoveryResult = CodexTaskRecoveryResult(
                     attempted: 0,
-                    succeeded: 0,
+                    started: 0,
                     failures: []
                 )
                 if !tasks.isEmpty {
-                    statusText = "Continuing \(tasks.count) task(s) on \(candidate.displayName)…"
+                    statusText = "Starting \(tasks.count) stopped task(s) on \(candidate.displayName)…"
                     recoveryResult = await recovery.resume(tasks)
                 }
                 statusText = "Reopening Codex…"
@@ -470,9 +470,9 @@ final class AccountStore: ObservableObject {
                 } else if recoveryResult.failures.isEmpty {
                     statusText = tasks.isEmpty
                         ? "Switched to \(candidate.displayName)"
-                        : "Switched account; continued \(recoveryResult.succeeded) task(s)"
+                        : "Switched account; started \(recoveryResult.started) task(s)"
                 } else {
-                    statusText = "Switched account; \(recoveryResult.succeeded)/\(recoveryResult.attempted) task(s) continued"
+                    statusText = "Switched account; started \(recoveryResult.started)/\(recoveryResult.attempted) task(s)"
                     errorMessage = recoveryResult.failures.joined(separator: "\n")
                 }
             } catch {
