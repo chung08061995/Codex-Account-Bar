@@ -100,12 +100,31 @@ final class CodexService {
     }
 
     func launchCodex(at applicationURL: URL) async throws {
+        let bundleIdentifier = "com.openai.codex"
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
-        configuration.createsNewApplicationInstance = true
-        _ = try await NSWorkspace.shared.openApplication(
-            at: applicationURL.resolvingSymlinksInPath(),
-            configuration: configuration
+        configuration.createsNewApplicationInstance = false
+        let workspace = NSWorkspace.shared
+        try await ApplicationLaunchCoordinator().launchIfNeeded(
+            isRunning: {
+                !NSRunningApplication.runningApplications(
+                    withBundleIdentifier: bundleIdentifier
+                ).isEmpty
+            },
+            open: { completion in
+                workspace.openApplication(
+                    at: applicationURL.resolvingSymlinksInPath(),
+                    configuration: configuration
+                ) { application, error in
+                    if let error {
+                        completion(.failure(error))
+                    } else if application != nil {
+                        completion(.success(()))
+                    } else {
+                        completion(.failure(CodexServiceError.launchFailed))
+                    }
+                }
+            }
         )
     }
 
@@ -225,6 +244,7 @@ enum CodexServiceError: LocalizedError {
     case appMissing
     case loginFailed(String)
     case invalidAuth
+    case launchFailed
 
     var errorDescription: String? {
         switch self {
@@ -238,6 +258,8 @@ enum CodexServiceError: LocalizedError {
                 : output.trimmingCharacters(in: .whitespacesAndNewlines)
         case .invalidAuth:
             "The Codex account ID is missing from this login."
+        case .launchFailed:
+            "Codex could not be opened."
         }
     }
 }

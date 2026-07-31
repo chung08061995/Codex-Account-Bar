@@ -28,6 +28,7 @@ final class AccountStore: ObservableObject {
     private let usageService = UsageService()
     private let providerUsageService = ProviderUsageService()
     private var addAccountTask: Task<Void, Never>?
+    private var activationTask: Task<Void, Never>?
     private var refreshLoopTask: Task<Void, Never>?
     private var failoverMonitorTask: Task<Void, Never>?
     private var lastAutoFailoverAt: Date?
@@ -69,20 +70,11 @@ final class AccountStore: ObservableObject {
                 }
             }
         }
-        failoverMonitorTask = Task { [weak self] in
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(nanoseconds: self?.failoverMonitorInterval ?? 0)
-                } catch {
-                    break
-                }
-                guard let self else { break }
-                await self.monitorActiveQuota()
-            }
-        }
+        startFailoverMonitor()
     }
 
     deinit {
+        activationTask?.cancel()
         refreshLoopTask?.cancel()
         failoverMonitorTask?.cancel()
     }
@@ -192,6 +184,35 @@ final class AccountStore: ObservableObject {
         statusText = "Cancelling sign-in…"
         codexService.cancelLogin()
         addAccountTask?.cancel()
+    }
+
+    func cancelCurrentOperation() {
+        if isAddingAccount {
+            cancelAddAccount()
+            return
+        }
+        guard isBusy else { return }
+        statusText = "Cancelling…"
+        if isAutoRecovering {
+            failoverMonitorTask?.cancel()
+            startFailoverMonitor()
+        } else {
+            activationTask?.cancel()
+        }
+    }
+
+    private func startFailoverMonitor() {
+        failoverMonitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: self?.failoverMonitorInterval ?? 0)
+                } catch {
+                    break
+                }
+                guard let self else { break }
+                await self.monitorActiveQuota()
+            }
+        }
     }
 
     func refreshUsage(showErrors: Bool = true) async -> Bool {
@@ -400,6 +421,10 @@ final class AccountStore: ObservableObject {
 
         statusText = "Quota exhausted; checking other accounts…"
         _ = await refreshUsage(showErrors: false)
+        guard !Task.isCancelled else {
+            statusText = "Automatic account switch cancelled"
+            return
+        }
         guard let exhausted = accounts.first(where: { $0.id == exhaustedAccountID }),
               QuotaFailoverPolicy.isExhausted(exhausted.usage)
         else {
@@ -422,6 +447,7 @@ final class AccountStore: ObservableObject {
                 throw AccountStoreError.missingCredentials(candidate.displayName)
             }
             let refreshed = try await usageService.fetchRefreshingCredential(authData: savedAuth)
+            try Task.checkCancellation()
             if refreshed.authData != savedAuth {
                 try KeychainStore.write(
                     refreshed.authData,
@@ -443,9 +469,12 @@ final class AccountStore: ObservableObject {
                 tasks = []
                 taskScanError = error.localizedDescription
             }
+            try Task.checkCancellation()
             let applicationURL = try await codexService.terminateCodex()
+            try Task.checkCancellation()
             do {
                 await providerService.activateNativeOpenAI { self.statusText = $0 }
+                try Task.checkCancellation()
                 try codexService.activateAccount(authData: refreshed.authData)
                 activeProviderID = nil
                 UserDefaults.standard.removeObject(forKey: activeProviderKey)
@@ -463,6 +492,7 @@ final class AccountStore: ObservableObject {
                 }
                 statusText = "Reopening Codex…"
                 try await codexService.launchCodex(at: applicationURL)
+                try Task.checkCancellation()
                 _ = await refreshUsage(showErrors: false)
                 if let taskScanError {
                     statusText = "Switched account; task recovery scan failed"
@@ -479,6 +509,8 @@ final class AccountStore: ObservableObject {
                 try? await codexService.launchCodex(at: applicationURL)
                 throw error
             }
+        } catch is CancellationError {
+            statusText = "Automatic account switch cancelled"
         } catch {
             statusText = "Automatic account switch failed"
             errorMessage = error.localizedDescription
@@ -489,10 +521,17 @@ final class AccountStore: ObservableObject {
         guard !isBusy else { return }
         isBusy = true
         errorMessage = nil
-        Task {
-            defer { isBusy = false }
+        activationTask = Task {
+            defer {
+                isBusy = false
+                activationTask = nil
+            }
             do {
+                try Task.checkCancellation()
                 try await operation()
+                try Task.checkCancellation()
+            } catch is CancellationError {
+                statusText = "Operation cancelled"
             } catch {
                 errorMessage = error.localizedDescription
                 statusText = "Activation failed"

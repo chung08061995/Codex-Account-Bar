@@ -213,13 +213,14 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer()
-            if store.isAddingAccount {
-                Button("Cancel sign-in", role: .cancel) {
-                    store.cancelAddAccount()
+            if store.isBusy {
+                Button(store.isAddingAccount ? "Cancel sign-in" : "Cancel operation", role: .cancel) {
+                    store.cancelCurrentOperation()
                 }
                 .buttonStyle(.plain)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.red)
+                .fixedSize(horizontal: true, vertical: false)
             } else {
                 Button("Quit") { NSApplication.shared.terminate(nil) }
                     .buttonStyle(.plain)
