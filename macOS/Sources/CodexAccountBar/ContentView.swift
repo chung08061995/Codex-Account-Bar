@@ -238,6 +238,17 @@ private struct UsageGrid: View {
                         Text(balance).font(.caption2.monospacedDigit())
                     }
                 }
+                if let resetCount = usage.availableResetCount, resetCount > 0 {
+                    HStack {
+                        Label("Rate-limit resets", systemImage: "arrow.counterclockwise.circle")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(resetCount) available")
+                            .font(.caption2.monospacedDigit())
+                    }
+                    .accessibilityElement(children: .combine)
+                }
             }
         }
     }

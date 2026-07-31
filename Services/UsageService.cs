@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 
 namespace CodexAccountBar.Services;
@@ -12,7 +13,9 @@ public sealed record UsageWindowResult(
 
 public sealed record UsageResult(
     UsageWindowResult Primary,
-    UsageWindowResult? Secondary
+    UsageWindowResult? Secondary,
+    int AvailableResetCount,
+    bool AutomaticResetApplied
 );
 
 public sealed class UsageService
@@ -27,16 +30,31 @@ public sealed class UsageService
             throw new InvalidDataException("Access token is missing.");
         }
 
-        using var request = new HttpRequestMessage(
-            HttpMethod.Get,
-            "https://chatgpt.com/backend-api/wham/usage"
-        );
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", identity.AccessToken);
-        if (identity.AccountId is not null)
+        var result = await FetchUsageAsync(identity.AccessToken, identity.AccountId);
+        if (ShouldConsumeReset(result))
         {
-            request.Headers.TryAddWithoutValidation("ChatGPT-Account-Id", identity.AccountId);
+            var code = await ConsumeResetAsync(identity.AccessToken, identity.AccountId);
+            if (code is "reset" or "already_redeemed")
+            {
+                var refreshed = await FetchUsageAsync(identity.AccessToken, identity.AccountId);
+                return refreshed.Usage with { AutomaticResetApplied = code == "reset" };
+            }
+            if (code is not "nothing_to_reset" and not "no_credit")
+            {
+                throw new InvalidDataException($"Codex rejected the available quota reset ({code}).");
+            }
         }
+        return result.Usage;
+    }
 
+    private async Task<UsageEnvelope> FetchUsageAsync(string accessToken, string? accountId)
+    {
+        using var request = AuthorizedRequest(
+            HttpMethod.Get,
+            "https://chatgpt.com/backend-api/wham/usage",
+            accessToken,
+            accountId
+        );
         using var response = await _http.SendAsync(request);
         response.EnsureSuccessStatusCode();
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -48,12 +66,82 @@ public sealed class UsageService
         var secondaryElement = rateLimit.TryGetProperty("secondary_window", out var secondary)
             ? secondary
             : default;
+        var availableResetCount = ResetCount(root, "available_count");
+        var applicableResetCount = ResetCount(root, "applicable_available_count");
+        var limitReached = rateLimit.TryGetProperty("limit_reached", out var reached) && reached.ValueKind == JsonValueKind.True;
+        var allowed = !rateLimit.TryGetProperty("allowed", out var allowedValue) || allowedValue.ValueKind != JsonValueKind.False;
 
-        return new UsageResult(
-            ParseWindow(primaryElement) ?? throw new InvalidDataException("Primary quota window is missing."),
-            ParseWindow(secondaryElement)
+        return new UsageEnvelope(
+            new UsageResult(
+                ParseWindow(primaryElement) ?? throw new InvalidDataException("Primary quota window is missing."),
+                ParseWindow(secondaryElement),
+                availableResetCount,
+                false
+            ),
+            limitReached,
+            allowed,
+            applicableResetCount
         );
     }
+
+    private async Task<string> ConsumeResetAsync(string accessToken, string? accountId)
+    {
+        using var request = AuthorizedRequest(
+            HttpMethod.Post,
+            "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
+            accessToken,
+            accountId
+        );
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(new { redeem_request_id = Guid.NewGuid().ToString() }),
+            Encoding.UTF8,
+            "application/json"
+        );
+        using var response = await _http.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return document.RootElement.TryGetProperty("code", out var code)
+            ? code.GetString() ?? "invalid_response"
+            : "invalid_response";
+    }
+
+    private static HttpRequestMessage AuthorizedRequest(
+        HttpMethod method,
+        string url,
+        string accessToken,
+        string? accountId
+    )
+    {
+        var request = new HttpRequestMessage(method, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        if (accountId is not null)
+        {
+            request.Headers.TryAddWithoutValidation("ChatGPT-Account-Id", accountId);
+        }
+        return request;
+    }
+
+    private static int ResetCount(JsonElement root, string property)
+    {
+        return root.TryGetProperty("rate_limit_reset_credits", out var resets)
+            && resets.TryGetProperty(property, out var count)
+            && count.TryGetInt32(out var value)
+                ? value
+                : 0;
+    }
+
+    private static bool ShouldConsumeReset(UsageEnvelope result)
+    {
+        return result.ApplicableResetCount > 0
+            && (result.LimitReached || !result.Allowed || result.Usage.Primary.UsedPercent >= 100);
+    }
+
+    private sealed record UsageEnvelope(
+        UsageResult Usage,
+        bool LimitReached,
+        bool Allowed,
+        int ApplicableResetCount
+    );
 
     private static UsageWindowResult? ParseWindow(JsonElement element)
     {

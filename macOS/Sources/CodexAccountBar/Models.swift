@@ -35,6 +35,8 @@ struct UsageSnapshot: Codable, Hashable {
     var secondary: UsageWindow?
     var creditsBalance: String?
     var fetchedAt: Double?
+    var availableResetCount: Int? = nil
+    var automaticResetApplied: Bool? = nil
 }
 
 struct SavedAccount: Codable, Identifiable, Hashable {

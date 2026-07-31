@@ -21,6 +21,10 @@ public sealed class AccountRecord : INotifyPropertyChanged
     public string SecondaryReset { get; set; } = "Reset unknown";
     public double SecondaryLeft => Math.Max(0, 100 - SecondaryUsed);
 
+    public int AvailableResetCount { get; set; }
+    public bool HasAvailableResets => AvailableResetCount > 0;
+    public string AvailableResetText => $"{AvailableResetCount} rate-limit reset{(AvailableResetCount == 1 ? "" : "s")} available";
+
     public string StatusText { get; set; } = "Refresh to load usage";
 
     public event PropertyChangedEventHandler? PropertyChanged;

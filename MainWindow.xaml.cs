@@ -98,6 +98,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 {
                     account.IsActive = account.Email.Equals(identity.Email, StringComparison.OrdinalIgnoreCase);
                 }
+                if (Accounts.Any(x => x.IsActive))
+                {
+                    await _vault.SaveAsync(active);
+                }
                 if (!Accounts.Any(x => x.IsActive))
                 {
                     var added = await _vault.SaveAsync(active);
@@ -138,11 +142,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 AppLog.Error("Refresh router status", e);
             }
 
+            var activeAuth = await _codex.ReadActiveAuthAsync();
+            var activeIdentity = activeAuth is null ? null : AuthInspector.Inspect(activeAuth);
             foreach (var account in Accounts)
             {
                 try
                 {
-                    var usage = await _usage.FetchAsync(await _vault.ReadAuthAsync(account.Id));
+                    var usesActiveAuth = activeAuth is not null
+                        && account.Email.Equals(activeIdentity?.Email, StringComparison.OrdinalIgnoreCase);
+                    var auth = usesActiveAuth ? activeAuth! : await _vault.ReadAuthAsync(account.Id);
+                    if (usesActiveAuth)
+                    {
+                        await _vault.SaveAsync(auth);
+                    }
+                    var usage = await _usage.FetchAsync(auth);
                     account.PrimaryTitle = usage.Primary.Title;
                     account.PrimaryUsed = usage.Primary.UsedPercent;
                     account.PrimaryReset = usage.Primary.ResetText;
@@ -153,7 +166,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         account.SecondaryUsed = usage.Secondary.UsedPercent;
                         account.SecondaryReset = usage.Secondary.ResetText;
                     }
-                    account.StatusText = "Usage refreshed";
+                    account.AvailableResetCount = usage.AvailableResetCount;
+                    account.StatusText = usage.AutomaticResetApplied
+                        ? "Quota exhausted; available reset applied"
+                        : "Usage refreshed";
                 }
                 catch (Exception e)
                 {

@@ -20,6 +20,10 @@ adds provider profiles for opencodex:
   shutdown state from overwriting the new provider catalog.
 - Session/weekly quota is refreshed from Codex and displayed as both a ring and
   horizontal progress bars, including reset time and credit balance.
+- Fresh auth from the active Codex session is synchronized before refreshing,
+  preventing an expired saved token from leaving the bar at a stale 0%.
+- Eligible banked rate-limit resets are displayed and automatically redeemed
+  only after Codex reports that quota is exhausted.
 - The active ChatGPT account's remaining quota is also shown as a compact ring
   and percentage directly in the macOS menu bar.
 - Provider API keys are stored in a separate macOS Keychain service.
@@ -51,7 +55,9 @@ opencodex version.
 - Adds accounts through the official `codex login` browser flow in an isolated temporary home; if the CLI is unavailable, imports the active Codex Desktop account.
 - Encrypts saved auth documents with Windows DPAPI (`CurrentUser`) in `%LOCALAPPDATA%\CodexAccountBar`.
 - Atomically switches `auth.json` and restarts Codex Desktop through its Windows app identity.
-- Shows session/weekly quota when the usage endpoint is available.
+- Shows session/weekly quota and available banked resets when the usage endpoint
+  is available. The active Codex auth is synchronized before refresh, and an
+  applicable reset is redeemed automatically only when quota is exhausted.
 - Detects and toggles 9Router as a Windows service, Docker container named `9router`, or global npm CLI.
 
 ## Build on Windows 10/11

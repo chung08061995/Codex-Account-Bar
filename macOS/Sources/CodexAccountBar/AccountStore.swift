@@ -177,16 +177,29 @@ final class AccountStore: ObservableObject {
         var failures: [String] = []
         let service = usageService
         let externalService = providerUsageService
+        let activeAuth = codexService.readActiveAuthData()
 
         await withTaskGroup(of: (String, Result<UsageSnapshot, Error>).self) { group in
             for account in accounts {
                 group.addTask {
                     do {
-                        guard let auth = try KeychainStore.read(
+                        guard let savedAuth = try KeychainStore.read(
                             service: KeychainStore.accountService,
                             account: account.id
                         ) else {
                             throw AccountStoreError.missingCredentials(account.displayName)
+                        }
+                        let auth = AccountCredentialResolver.resolve(
+                            accountID: account.id,
+                            savedAuth: savedAuth,
+                            activeAuth: activeAuth
+                        )
+                        if auth != savedAuth {
+                            try KeychainStore.write(
+                                auth,
+                                service: KeychainStore.accountService,
+                                account: account.id
+                            )
                         }
                         return (account.id, .success(try await service.fetch(authData: auth)))
                     } catch {
@@ -235,7 +248,12 @@ final class AccountStore: ObservableObject {
         persistAccounts()
         isRefreshingUsage = false
         if !isBusy {
-            statusText = failures.isEmpty ? "Quota refreshed" : "Quota refreshed with \(failures.count) error(s)"
+            let resetApplied = accounts.contains { $0.usage?.automaticResetApplied == true }
+            if resetApplied {
+                statusText = "Quota exhausted; available reset applied"
+            } else {
+                statusText = failures.isEmpty ? "Quota refreshed" : "Quota refreshed with \(failures.count) error(s)"
+            }
         }
         let targetCount = accounts.count + quotaProviders.count
         if showErrors, targetCount > 0, failures.count == targetCount, let first = failures.first {

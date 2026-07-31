@@ -22,6 +22,10 @@ final class CodexService {
 
     var authURL: URL { codexHome.appending(path: "auth.json") }
 
+    func readActiveAuthData() -> Data? {
+        try? Data(contentsOf: authURL)
+    }
+
     func activateAccount(authData: Data) throws {
         _ = try JSONSerialization.jsonObject(with: authData)
         try fileManager.createDirectory(at: codexHome, withIntermediateDirectories: true)
@@ -35,15 +39,10 @@ final class CodexService {
     }
 
     func activeAccountID(accounts: [SavedAccount]) -> String? {
-        guard let active = try? Data(contentsOf: authURL) else { return nil }
-        for account in accounts {
-            guard let saved = try? KeychainStore.read(
-                service: KeychainStore.accountService,
-                account: account.id
-            ) else { continue }
-            if canonicalJSON(saved) == canonicalJSON(active) { return account.id }
-        }
-        return nil
+        guard let active = readActiveAuthData(),
+              let accountID = AccountCredentialResolver.authAccountID(active)
+        else { return nil }
+        return accounts.contains(where: { $0.id == accountID }) ? accountID : nil
     }
 
     func loginIsolated() async throws -> (account: SavedAccount, authData: Data) {
@@ -106,14 +105,6 @@ final class CodexService {
         ["/Applications/ChatGPT.app", "/Applications/Codex.app"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
             .first { fileManager.fileExists(atPath: $0.path) }
-    }
-
-    private func canonicalJSON(_ data: Data?) -> Data? {
-        guard let data,
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let canonical = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
-        else { return nil }
-        return canonical
     }
 
     private func findCodexCLI() throws -> URL {

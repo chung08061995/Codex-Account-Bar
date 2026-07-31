@@ -2,6 +2,7 @@ import Foundation
 
 struct UsageService {
     private let usageURL = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
+    private let resetURL = URL(string: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume")!
 
     func fetch(authData: Data) async throws -> UsageSnapshot {
         guard let root = try JSONSerialization.jsonObject(with: authData) as? [String: Any],
@@ -12,16 +13,23 @@ struct UsageService {
             throw UsageServiceError.invalidAuth
         }
 
-        var request = URLRequest(url: usageURL)
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue(accountID, forHTTPHeaderField: "ChatGPT-Account-Id")
-        request.timeoutInterval = 20
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw UsageServiceError.requestFailed((response as? HTTPURLResponse)?.statusCode ?? 0)
+        var payload = try await fetchUsage(accessToken: accessToken, accountID: accountID)
+        var automaticResetApplied = false
+        if RateLimitResetPolicy.shouldConsume(
+            usedPercent: payload.rateLimit.primaryWindow?.usedPercent,
+            limitReached: payload.rateLimit.limitReached,
+            allowed: payload.rateLimit.allowed,
+            applicableResetCount: payload.resetCredits?.applicableAvailableCount ?? 0
+        ) {
+            let code = try await consumeReset(accessToken: accessToken, accountID: accountID)
+            if code == "reset" || code == "already_redeemed" {
+                automaticResetApplied = code == "reset"
+                payload = try await fetchUsage(accessToken: accessToken, accountID: accountID)
+            } else if code != "nothing_to_reset" && code != "no_credit" {
+                throw UsageServiceError.resetRejected(code)
+            }
         }
-        let payload = try JSONDecoder().decode(UsageResponse.self, from: data)
+
         guard let primary = payload.rateLimit.primaryWindow else {
             throw UsageServiceError.invalidResponse
         }
@@ -29,8 +37,47 @@ struct UsageService {
             primary: map(primary),
             secondary: payload.rateLimit.secondaryWindow.map(map),
             creditsBalance: payload.credits?.balance,
-            fetchedAt: Date().timeIntervalSinceReferenceDate
+            fetchedAt: Date().timeIntervalSinceReferenceDate,
+            availableResetCount: payload.resetCredits?.availableCount,
+            automaticResetApplied: automaticResetApplied
         )
+    }
+
+    private func fetchUsage(accessToken: String, accountID: String) async throws -> UsageResponse {
+        var request = authorizedRequest(url: usageURL, accessToken: accessToken, accountID: accountID)
+        request.timeoutInterval = 20
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw UsageServiceError.requestFailed((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+        return try JSONDecoder().decode(UsageResponse.self, from: data)
+    }
+
+    private func consumeReset(accessToken: String, accountID: String) async throws -> String {
+        var request = authorizedRequest(url: resetURL, accessToken: accessToken, accountID: accountID)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "redeem_request_id": UUID().uuidString
+        ])
+        request.timeoutInterval = 20
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw UsageServiceError.requestFailed((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+        guard let body = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let code = body["code"] as? String
+        else {
+            throw UsageServiceError.invalidResponse
+        }
+        return code
+    }
+
+    private func authorizedRequest(url: URL, accessToken: String, accountID: String) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(accountID, forHTTPHeaderField: "ChatGPT-Account-Id")
+        return request
     }
 
     private func map(_ window: APIUsageWindow) -> UsageWindow {
@@ -86,7 +133,9 @@ struct ProviderUsageService {
             ),
             secondary: nil,
             creditsBalance: String(format: "%.2f / %.0f credits", balance, dailyQuota),
-            fetchedAt: Date().timeIntervalSinceReferenceDate
+            fetchedAt: Date().timeIntervalSinceReferenceDate,
+            availableResetCount: nil,
+            automaticResetApplied: false
         )
     }
 }
@@ -100,18 +149,24 @@ private struct ClaudibleUsageResponse: Decodable {
 private struct UsageResponse: Decodable {
     let rateLimit: APIRateLimit
     let credits: APICredits?
+    let resetCredits: APIRateLimitResetCredits?
 
     enum CodingKeys: String, CodingKey {
         case rateLimit = "rate_limit"
         case credits
+        case resetCredits = "rate_limit_reset_credits"
     }
 }
 
 private struct APIRateLimit: Decodable {
+    let allowed: Bool
+    let limitReached: Bool
     let primaryWindow: APIUsageWindow?
     let secondaryWindow: APIUsageWindow?
 
     enum CodingKeys: String, CodingKey {
+        case allowed
+        case limitReached = "limit_reached"
         case primaryWindow = "primary_window"
         case secondaryWindow = "secondary_window"
     }
@@ -133,11 +188,22 @@ private struct APICredits: Decodable {
     let balance: String?
 }
 
+private struct APIRateLimitResetCredits: Decodable {
+    let availableCount: Int
+    let applicableAvailableCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case availableCount = "available_count"
+        case applicableAvailableCount = "applicable_available_count"
+    }
+}
+
 enum UsageServiceError: LocalizedError {
     case invalidAuth
     case requestFailed(Int)
     case invalidResponse
     case unsupportedProvider(String)
+    case resetRejected(String)
 
     var errorDescription: String? {
         switch self {
@@ -145,6 +211,7 @@ enum UsageServiceError: LocalizedError {
         case .requestFailed(let status): "Usage request failed (HTTP \(status))."
         case .invalidResponse: "Codex returned an invalid usage response."
         case .unsupportedProvider(let provider): "Quota is not supported for \(provider) yet."
+        case .resetRejected(let code): "Codex rejected the available quota reset (\(code))."
         }
     }
 }
