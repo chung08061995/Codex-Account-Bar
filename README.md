@@ -22,6 +22,8 @@ adds provider profiles for opencodex:
   horizontal progress bars, including reset time and credit balance.
 - Fresh auth from the active Codex session is synchronized before refreshing,
   preventing an expired saved token from leaving the bar at a stale 0%.
+- Saved inactive accounts renew their access token on a `401` response and retry
+  quota once, so refreshing the list does not require switching every account.
 - Eligible banked rate-limit resets are displayed and automatically redeemed
   only after Codex reports that quota is exhausted.
 - The active ChatGPT account's remaining quota is also shown as a compact ring
@@ -57,7 +59,8 @@ opencodex version.
 - Atomically switches `auth.json` and restarts Codex Desktop through its Windows app identity.
 - Shows session/weekly quota and available banked resets when the usage endpoint
   is available. The active Codex auth is synchronized before refresh, and an
-  applicable reset is redeemed automatically only when quota is exhausted.
+  expired saved access token is renewed before retrying. An applicable reset is
+  redeemed automatically only when quota is exhausted.
 - Detects and toggles 9Router as a Windows service, Docker container named `9router`, or global npm CLI.
 
 ## Build on Windows 10/11

@@ -155,7 +155,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     {
                         await _vault.SaveAsync(auth);
                     }
-                    var usage = await _usage.FetchAsync(auth);
+                    var refreshed = await _usage.FetchRefreshingCredentialAsync(auth);
+                    if (!string.Equals(refreshed.AuthJson, auth, StringComparison.Ordinal))
+                    {
+                        await _vault.SaveAsync(refreshed.AuthJson);
+                    }
+                    var usage = refreshed.Usage;
                     account.PrimaryTitle = usage.Primary.Title;
                     account.PrimaryUsed = usage.Primary.UsedPercent;
                     account.PrimaryReset = usage.Primary.ResetText;
@@ -285,7 +290,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         Message = $"Switching to {account.Email}…";
         try
         {
-            await _codex.WriteAndRestartAsync(await _vault.ReadAuthAsync(account.Id));
+            var savedAuth = await _vault.ReadAuthAsync(account.Id);
+            var refreshedCredential = await _usage.FetchRefreshingCredentialAsync(savedAuth);
+            if (!string.Equals(refreshedCredential.AuthJson, savedAuth, StringComparison.Ordinal))
+            {
+                await _vault.SaveAsync(refreshedCredential.AuthJson);
+            }
+            var usage = refreshedCredential.Usage;
+            account.PrimaryTitle = usage.Primary.Title;
+            account.PrimaryUsed = usage.Primary.UsedPercent;
+            account.PrimaryReset = usage.Primary.ResetText;
+            account.HasSecondary = usage.Secondary is not null;
+            if (usage.Secondary is not null)
+            {
+                account.SecondaryTitle = usage.Secondary.Title;
+                account.SecondaryUsed = usage.Secondary.UsedPercent;
+                account.SecondaryReset = usage.Secondary.ResetText;
+            }
+            account.AvailableResetCount = usage.AvailableResetCount;
+            account.NotifyAll();
+            await _codex.WriteAndRestartAsync(refreshedCredential.AuthJson);
             foreach (var item in Accounts)
             {
                 item.IsActive = item.Id == account.Id;

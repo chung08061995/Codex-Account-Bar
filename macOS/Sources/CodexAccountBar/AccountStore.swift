@@ -179,7 +179,7 @@ final class AccountStore: ObservableObject {
         let externalService = providerUsageService
         let activeAuth = codexService.readActiveAuthData()
 
-        await withTaskGroup(of: (String, Result<UsageSnapshot, Error>).self) { group in
+        await withTaskGroup(of: (String, Result<AccountUsageRefresh, Error>).self) { group in
             for account in accounts {
                 group.addTask {
                     do {
@@ -201,7 +201,15 @@ final class AccountStore: ObservableObject {
                                 account: account.id
                             )
                         }
-                        return (account.id, .success(try await service.fetch(authData: auth)))
+                        let refreshed = try await service.fetchRefreshingCredential(authData: auth)
+                        if refreshed.authData != auth {
+                            try KeychainStore.write(
+                                refreshed.authData,
+                                service: KeychainStore.accountService,
+                                account: account.id
+                            )
+                        }
+                        return (account.id, .success(refreshed))
                     } catch {
                         return (account.id, .failure(error))
                     }
@@ -211,8 +219,8 @@ final class AccountStore: ObservableObject {
             for await (accountID, result) in group {
                 guard let index = accounts.firstIndex(where: { $0.id == accountID }) else { continue }
                 switch result {
-                case .success(let usage):
-                    accounts[index].usage = usage
+                case .success(let refreshed):
+                    accounts[index].usage = refreshed.usage
                 case .failure(let error):
                     failures.append(error.localizedDescription)
                 }
@@ -264,15 +272,28 @@ final class AccountStore: ObservableObject {
 
     func activateAccount(_ account: SavedAccount) {
         perform {
-            self.statusText = "Switching to \(account.displayName)…"
-            guard let auth = try KeychainStore.read(
+            self.statusText = "Checking \(account.displayName)…"
+            guard let savedAuth = try KeychainStore.read(
                 service: KeychainStore.accountService,
                 account: account.id
             ) else {
                 throw AccountStoreError.missingCredentials(account.displayName)
             }
+            let refreshed = try await self.usageService.fetchRefreshingCredential(authData: savedAuth)
+            if refreshed.authData != savedAuth {
+                try KeychainStore.write(
+                    refreshed.authData,
+                    service: KeychainStore.accountService,
+                    account: account.id
+                )
+            }
+            if let index = self.accounts.firstIndex(where: { $0.id == account.id }) {
+                self.accounts[index].usage = refreshed.usage
+                self.persistAccounts()
+            }
+            self.statusText = "Switching to \(account.displayName)…"
             await self.providerService.activateNativeOpenAI { self.statusText = $0 }
-            try self.codexService.activateAccount(authData: auth)
+            try self.codexService.activateAccount(authData: refreshed.authData)
             self.activeProviderID = nil
             UserDefaults.standard.removeObject(forKey: self.activeProviderKey)
             self.activeAccountID = account.id

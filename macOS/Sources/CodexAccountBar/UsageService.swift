@@ -4,6 +4,18 @@ struct UsageService {
     private let usageURL = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
     private let resetURL = URL(string: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume")!
 
+    func fetchRefreshingCredential(authData: Data) async throws -> AccountUsageRefresh {
+        do {
+            return AccountUsageRefresh(usage: try await fetch(authData: authData), authData: authData)
+        } catch UsageServiceError.requestFailed(401) {
+            let refreshedAuth = try await AuthTokenRefreshService().refresh(authData: authData)
+            return AccountUsageRefresh(
+                usage: try await fetch(authData: refreshedAuth),
+                authData: refreshedAuth
+            )
+        }
+    }
+
     func fetch(authData: Data) async throws -> UsageSnapshot {
         guard let root = try JSONSerialization.jsonObject(with: authData) as? [String: Any],
               let tokens = root["tokens"] as? [String: Any],
@@ -89,6 +101,11 @@ struct UsageService {
             windowSeconds: window.limitWindowSeconds
         )
     }
+}
+
+struct AccountUsageRefresh: Sendable {
+    let usage: UsageSnapshot
+    let authData: Data
 }
 
 struct ProviderUsageService {

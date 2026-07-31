@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 
@@ -18,9 +19,25 @@ public sealed record UsageResult(
     bool AutomaticResetApplied
 );
 
+public sealed record AccountUsageRefresh(UsageResult Usage, string AuthJson);
+
 public sealed class UsageService
 {
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
+    private readonly AuthTokenRefreshService _authRefresh = new();
+
+    public async Task<AccountUsageRefresh> FetchRefreshingCredentialAsync(string json)
+    {
+        try
+        {
+            return new AccountUsageRefresh(await FetchAsync(json), json);
+        }
+        catch (HttpRequestException exception) when (exception.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            var refreshedJson = await _authRefresh.RefreshAsync(json);
+            return new AccountUsageRefresh(await FetchAsync(refreshedJson), refreshedJson);
+        }
+    }
 
     public async Task<UsageResult> FetchAsync(string json)
     {
