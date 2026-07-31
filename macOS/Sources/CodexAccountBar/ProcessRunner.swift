@@ -24,20 +24,23 @@ enum ProcessRunner {
         _ executable: URL,
         arguments: [String],
         environment: [String: String] = ProcessInfo.processInfo.environment,
+        currentDirectoryURL: URL? = nil,
+        captureOutput: Bool = true,
         timeout: TimeInterval = 30
     ) async throws -> ProcessResult {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
-            let pipe = Pipe()
+            let pipe = captureOutput ? Pipe() : nil
             process.executableURL = executable
             process.arguments = arguments
             process.environment = preparedEnvironment(environment)
-            process.standardOutput = pipe
-            process.standardError = pipe
+            process.currentDirectoryURL = currentDirectoryURL
+            process.standardOutput = pipe?.fileHandleForWriting ?? FileHandle.nullDevice
+            process.standardError = pipe?.fileHandleForWriting ?? FileHandle.nullDevice
 
             let state = LockedContinuation(continuation)
             process.terminationHandler = { process in
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let data = pipe?.fileHandleForReading.readDataToEndOfFile() ?? Data()
                 state.resume(.success(ProcessResult(
                     exitCode: process.terminationStatus,
                     output: String(decoding: data, as: UTF8.self)

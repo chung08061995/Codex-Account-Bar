@@ -19,6 +19,11 @@ struct ApplicationRestartCoordinator {
         targets: [RestartTarget],
         open: () async throws -> Void
     ) async throws {
+        try await terminate(targets: targets)
+        try await open()
+    }
+
+    func terminate(targets: [RestartTarget]) async throws {
         targets.forEach { $0.terminate() }
         if !targets.isEmpty,
            try await !waitForTermination(targets, maximumPolls: maximumGracefulPolls) {
@@ -27,7 +32,6 @@ struct ApplicationRestartCoordinator {
                 throw ApplicationRestartError.terminationTimedOut
             }
         }
-        try await open()
     }
 
     private func waitForTermination(

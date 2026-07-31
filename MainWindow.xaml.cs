@@ -23,12 +23,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly UsageService _usage = new();
     private readonly NineRouterService _router = new();
     private readonly DispatcherTimer _refreshTimer = new();
+    private readonly DispatcherTimer _failoverTimer = new() { Interval = TimeSpan.FromMinutes(1) };
 
     private bool _routerRunning;
     private bool _routerCanToggle;
     private bool _routerBusy;
     private bool _refreshingUsage;
+    private bool _autoFailoverEnabled = AppSettingsStore.ReadAutoFailoverEnabled();
+    private bool _isAutoRecovering;
     private bool _forceClose;
+    private DateTimeOffset? _lastAutoFailoverAt;
     private TimeSpan _nextRefreshDelay = AutomaticRefreshInterval;
     private string _routerDetail = "Detecting…";
     private string _message = "";
@@ -48,6 +52,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
     public Visibility MessageVisibility => string.IsNullOrWhiteSpace(Message) ? Visibility.Collapsed : Visibility.Visible;
     public Visibility EmptyVisibility => Accounts.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    public bool AutoFailoverEnabled
+    {
+        get => _autoFailoverEnabled;
+        set
+        {
+            if (!Set(ref _autoFailoverEnabled, value)) return;
+            AppSettingsStore.WriteAutoFailoverEnabled(value);
+        }
+    }
+    public bool IsAutoRecovering { get => _isAutoRecovering; private set => Set(ref _isAutoRecovering, value); }
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public MainWindow()
@@ -59,6 +73,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _refreshTimer.Stop();
             await RefreshAllAsync();
         };
+        _failoverTimer.Tick += async (_, _) =>
+        {
+            _failoverTimer.Stop();
+            try { await MonitorActiveQuotaAsync(); }
+            finally { if (!_forceClose) _failoverTimer.Start(); }
+        };
+        _failoverTimer.Start();
         Loaded += async (_, _) =>
         {
             if (Accounts.Count == 0)
@@ -160,21 +181,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     {
                         await _vault.SaveAsync(refreshed.AuthJson);
                     }
-                    var usage = refreshed.Usage;
-                    account.PrimaryTitle = usage.Primary.Title;
-                    account.PrimaryUsed = usage.Primary.UsedPercent;
-                    account.PrimaryReset = usage.Primary.ResetText;
-                    account.HasSecondary = usage.Secondary is not null;
-                    if (usage.Secondary is not null)
-                    {
-                        account.SecondaryTitle = usage.Secondary.Title;
-                        account.SecondaryUsed = usage.Secondary.UsedPercent;
-                        account.SecondaryReset = usage.Secondary.ResetText;
-                    }
-                    account.AvailableResetCount = usage.AvailableResetCount;
-                    account.StatusText = usage.AutomaticResetApplied
-                        ? "Quota exhausted; available reset applied"
-                        : "Usage refreshed";
+                    ApplyUsage(account, refreshed.Usage);
                 }
                 catch (Exception e)
                 {
@@ -296,18 +303,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 await _vault.SaveAsync(refreshedCredential.AuthJson);
             }
-            var usage = refreshedCredential.Usage;
-            account.PrimaryTitle = usage.Primary.Title;
-            account.PrimaryUsed = usage.Primary.UsedPercent;
-            account.PrimaryReset = usage.Primary.ResetText;
-            account.HasSecondary = usage.Secondary is not null;
-            if (usage.Secondary is not null)
-            {
-                account.SecondaryTitle = usage.Secondary.Title;
-                account.SecondaryUsed = usage.Secondary.UsedPercent;
-                account.SecondaryReset = usage.Secondary.ResetText;
-            }
-            account.AvailableResetCount = usage.AvailableResetCount;
+            ApplyUsage(account, refreshedCredential.Usage);
             account.NotifyAll();
             await _codex.WriteAndRestartAsync(refreshedCredential.AuthJson);
             foreach (var item in Accounts)
@@ -352,6 +348,144 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         Message = succeeded ? "Refresh complete." : "Refresh completed with errors. Retrying automatically.";
     }
 
+    private async Task MonitorActiveQuotaAsync()
+    {
+        if (!AutoFailoverEnabled || _refreshingUsage || IsAutoRecovering) return;
+        var active = Accounts.FirstOrDefault(account => account.IsActive);
+        if (active is null) return;
+        try
+        {
+            var activeAuth = await _codex.ReadActiveAuthAsync();
+            var auth = activeAuth is not null
+                && active.Email.Equals(AuthInspector.Inspect(activeAuth).Email, StringComparison.OrdinalIgnoreCase)
+                ? activeAuth
+                : await _vault.ReadAuthAsync(active.Id);
+            var refreshed = await _usage.FetchRefreshingCredentialAsync(auth);
+            if (!string.Equals(refreshed.AuthJson, auth, StringComparison.Ordinal))
+                await _vault.SaveAsync(refreshed.AuthJson);
+            ApplyUsage(active, refreshed.Usage);
+            active.NotifyAll();
+            if (QuotaFailoverPolicy.IsExhausted(active))
+                await AttemptAutoFailoverAsync(active);
+        }
+        catch (Exception exception)
+        {
+            AppLog.Error("Automatic quota check", exception);
+            Message = "Auto-switch check failed; retrying.";
+        }
+    }
+
+    private async Task AttemptAutoFailoverAsync(AccountRecord exhaustedAccount)
+    {
+        if (!AutoFailoverEnabled || IsAutoRecovering) return;
+        if (_lastAutoFailoverAt is { } last
+            && DateTimeOffset.UtcNow - last < TimeSpan.FromMinutes(10)) return;
+
+        IsAutoRecovering = true;
+        Message = "Quota exhausted; checking other accounts…";
+        try
+        {
+            await RefreshAllAsync();
+            if (!QuotaFailoverPolicy.IsExhausted(exhaustedAccount))
+            {
+                Message = "Quota restored; staying on the current account.";
+                return;
+            }
+            var candidate = QuotaFailoverPolicy.BestCandidate(Accounts, exhaustedAccount.Id);
+            if (candidate is null)
+            {
+                Message = "Quota exhausted; no other account has usable quota.";
+                return;
+            }
+
+            var savedAuth = await _vault.ReadAuthAsync(candidate.Id);
+            var refreshed = await _usage.FetchRefreshingCredentialAsync(savedAuth);
+            if (!string.Equals(refreshed.AuthJson, savedAuth, StringComparison.Ordinal))
+                await _vault.SaveAsync(refreshed.AuthJson);
+            ApplyUsage(candidate, refreshed.Usage);
+            candidate.NotifyAll();
+
+            var cli = _codex.FindCodexCli();
+            IReadOnlyList<RecoverableCodexTask> tasks = [];
+            CodexTaskRecoveryService? recovery = null;
+            string? taskScanError = null;
+            if (cli is not null)
+            {
+                recovery = new CodexTaskRecoveryService(_codex.CodexHome, cli);
+                Message = "Finding tasks stopped by quota…";
+                try { tasks = await recovery.FindUsageLimitedTasksAsync(); }
+                catch (Exception exception)
+                {
+                    taskScanError = exception.Message;
+                    AppLog.Error("Find quota-limited tasks", exception);
+                }
+            }
+
+            var launchTarget = await _codex.TerminateAsync();
+            try
+            {
+                await _router.EnsureStoppedAsync();
+                await _codex.RestoreOfficialConfigAsync();
+                await _codex.WriteAuthAsync(refreshed.AuthJson);
+                foreach (var account in Accounts)
+                {
+                    account.IsActive = account.Id == candidate.Id;
+                    account.NotifyAll();
+                }
+                _lastAutoFailoverAt = DateTimeOffset.UtcNow;
+
+                var result = new CodexTaskRecoveryResult(0, 0, []);
+                if (recovery is not null && tasks.Count > 0)
+                {
+                    Message = $"Continuing {tasks.Count} task(s) on {candidate.Email}…";
+                    result = await recovery.ResumeAsync(tasks);
+                }
+                if (!await _codex.LaunchAsync(launchTarget))
+                    throw new InvalidOperationException("Codex Desktop could not be reopened.");
+                await RefreshAllAsync();
+                Message = taskScanError is not null
+                    ? $"Switched to {candidate.Email}, but task recovery scan failed: {taskScanError}"
+                    : cli is null
+                    ? $"Switched to {candidate.Email}. Codex CLI was not found, so stopped tasks need manual continuation."
+                    : result.Failures.Count == 0
+                        ? tasks.Count == 0
+                            ? $"Switched to {candidate.Email}."
+                            : $"Switched account; continued {result.Succeeded} task(s)."
+                        : $"Switched account; continued {result.Succeeded}/{result.Attempted} task(s).";
+                if (result.Failures.Count > 0) AppLog.Error("Resume quota-limited tasks", new AggregateException(result.Failures.Select(message => new Exception(message))));
+            }
+            catch
+            {
+                await _codex.LaunchAsync(launchTarget);
+                throw;
+            }
+        }
+        catch (Exception exception)
+        {
+            AppLog.Error("Automatic account failover", exception);
+            Message = "Automatic account switch failed: " + exception.Message;
+        }
+        finally { IsAutoRecovering = false; }
+    }
+
+    private static void ApplyUsage(AccountRecord account, UsageResult usage)
+    {
+        account.PrimaryTitle = usage.Primary.Title;
+        account.PrimaryUsed = usage.Primary.UsedPercent;
+        account.PrimaryReset = usage.Primary.ResetText;
+        account.HasSecondary = usage.Secondary is not null;
+        if (usage.Secondary is not null)
+        {
+            account.SecondaryTitle = usage.Secondary.Title;
+            account.SecondaryUsed = usage.Secondary.UsedPercent;
+            account.SecondaryReset = usage.Secondary.ResetText;
+        }
+        account.AvailableResetCount = usage.AvailableResetCount;
+        account.StatusText = usage.AutomaticResetApplied
+            ? "Quota exhausted; available reset applied"
+            : "Usage refreshed";
+    }
+
     private void Hide_Click(object sender, RoutedEventArgs e) => Hide();
     private void Settings_Click(object sender, RoutedEventArgs e) =>
         Message = $"Codex auth: {_codex.AuthPath}\n9Router service, Docker and npm CLI detection enabled.";
@@ -359,6 +493,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public void ForceClose()
     {
         _refreshTimer.Stop();
+        _failoverTimer.Stop();
         _forceClose = true;
         Close();
     }
@@ -373,11 +508,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         base.OnClosing(e);
     }
 
-    private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
+    private bool Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
     {
-        if (EqualityComparer<T>.Default.Equals(field, value)) return;
+        if (EqualityComparer<T>.Default.Equals(field, value)) return false;
         field = value;
         Changed(name);
+        return true;
     }
 
     private void Changed([CallerMemberName] string? name = null) =>

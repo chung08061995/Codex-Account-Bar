@@ -12,6 +12,12 @@ final class AccountStore: ObservableObject {
     @Published var isBusy = false
     @Published var isAddingAccount = false
     @Published var isRefreshingUsage = false
+    @Published var autoFailoverEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(autoFailoverEnabled, forKey: Self.autoFailoverKey)
+        }
+    }
+    @Published private(set) var isAutoRecovering = false
     @Published var errorMessage: String?
 
     private let accountMetadataKey = "savedAccountMetadata.v1"
@@ -23,8 +29,13 @@ final class AccountStore: ObservableObject {
     private let providerUsageService = ProviderUsageService()
     private var addAccountTask: Task<Void, Never>?
     private var refreshLoopTask: Task<Void, Never>?
+    private var failoverMonitorTask: Task<Void, Never>?
+    private var lastAutoFailoverAt: Date?
 
     private let automaticRefreshInterval: UInt64 = 10 * 60 * 1_000_000_000
+    private let failoverMonitorInterval: UInt64 = 60 * 1_000_000_000
+    private let failoverCooldown: TimeInterval = 10 * 60
+    private static let autoFailoverKey = "autoFailoverEnabled.v1"
 
     var activeQuotaWindow: UsageWindow? {
         if let activeProviderID {
@@ -35,6 +46,7 @@ final class AccountStore: ObservableObject {
     }
 
     init() {
+        autoFailoverEnabled = UserDefaults.standard.object(forKey: Self.autoFailoverKey) as? Bool ?? true
         load()
         Task { await refreshUsage(showErrors: false) }
         refreshLoopTask = Task { [weak self] in
@@ -57,10 +69,22 @@ final class AccountStore: ObservableObject {
                 }
             }
         }
+        failoverMonitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: self?.failoverMonitorInterval ?? 0)
+                } catch {
+                    break
+                }
+                guard let self else { break }
+                await self.monitorActiveQuota()
+            }
+        }
     }
 
     deinit {
         refreshLoopTask?.cancel()
+        failoverMonitorTask?.cancel()
     }
 
     func load() {
@@ -317,6 +341,147 @@ final class AccountStore: ObservableObject {
             try await self.codexService.restartCodex()
             _ = await self.refreshUsage(showErrors: false)
             self.statusText = "Using \(profile.name)"
+        }
+    }
+
+    private func monitorActiveQuota() async {
+        guard autoFailoverEnabled,
+              !isBusy,
+              !isRefreshingUsage,
+              !isAutoRecovering,
+              activeProviderID == nil,
+              let activeAccountID,
+              let index = accounts.firstIndex(where: { $0.id == activeAccountID })
+        else { return }
+
+        do {
+            guard let savedAuth = try KeychainStore.read(
+                service: KeychainStore.accountService,
+                account: activeAccountID
+            ) else {
+                throw AccountStoreError.missingCredentials(accounts[index].displayName)
+            }
+            let auth = AccountCredentialResolver.resolve(
+                accountID: activeAccountID,
+                savedAuth: savedAuth,
+                activeAuth: codexService.readActiveAuthData()
+            )
+            let refreshed = try await usageService.fetchRefreshingCredential(authData: auth)
+            if refreshed.authData != savedAuth {
+                try KeychainStore.write(
+                    refreshed.authData,
+                    service: KeychainStore.accountService,
+                    account: activeAccountID
+                )
+            }
+            accounts[index].usage = refreshed.usage
+            persistAccounts()
+            guard QuotaFailoverPolicy.isExhausted(refreshed.usage) else { return }
+            await attemptAutoFailover(exhaustedAccountID: activeAccountID)
+        } catch {
+            statusText = "Auto-switch check failed; retrying"
+        }
+    }
+
+    private func attemptAutoFailover(exhaustedAccountID: String) async {
+        guard autoFailoverEnabled, !isAutoRecovering else { return }
+        if let lastAutoFailoverAt,
+           Date().timeIntervalSince(lastAutoFailoverAt) < failoverCooldown {
+            return
+        }
+
+        isAutoRecovering = true
+        isBusy = true
+        errorMessage = nil
+        defer {
+            isBusy = false
+            isAutoRecovering = false
+        }
+
+        statusText = "Quota exhausted; checking other accounts…"
+        _ = await refreshUsage(showErrors: false)
+        guard let exhausted = accounts.first(where: { $0.id == exhaustedAccountID }),
+              QuotaFailoverPolicy.isExhausted(exhausted.usage)
+        else {
+            statusText = "Quota restored; staying on current account"
+            return
+        }
+        guard let candidate = QuotaFailoverPolicy.bestCandidate(
+            from: accounts,
+            excludingAccountID: exhaustedAccountID
+        ) else {
+            statusText = "Quota exhausted; no other account has usable quota"
+            return
+        }
+
+        do {
+            guard let savedAuth = try KeychainStore.read(
+                service: KeychainStore.accountService,
+                account: candidate.id
+            ) else {
+                throw AccountStoreError.missingCredentials(candidate.displayName)
+            }
+            let refreshed = try await usageService.fetchRefreshingCredential(authData: savedAuth)
+            if refreshed.authData != savedAuth {
+                try KeychainStore.write(
+                    refreshed.authData,
+                    service: KeychainStore.accountService,
+                    account: candidate.id
+                )
+            }
+
+            let recovery = CodexTaskRecoveryService(
+                codexHome: codexService.codexHome,
+                codexExecutable: try codexService.findCodexCLI()
+            )
+            statusText = "Finding tasks stopped by quota…"
+            var taskScanError: String?
+            let tasks: [RecoverableCodexTask]
+            do {
+                tasks = try await recovery.findUsageLimitedTasks()
+            } catch {
+                tasks = []
+                taskScanError = error.localizedDescription
+            }
+            let applicationURL = try await codexService.terminateCodex()
+            do {
+                await providerService.activateNativeOpenAI { self.statusText = $0 }
+                try codexService.activateAccount(authData: refreshed.authData)
+                activeProviderID = nil
+                UserDefaults.standard.removeObject(forKey: activeProviderKey)
+                activeAccountID = candidate.id
+                lastAutoFailoverAt = Date()
+
+                var recoveryResult = CodexTaskRecoveryResult(
+                    attempted: 0,
+                    succeeded: 0,
+                    failures: []
+                )
+                if !tasks.isEmpty {
+                    statusText = "Continuing \(tasks.count) task(s) on \(candidate.displayName)…"
+                    recoveryResult = await recovery.resume(tasks)
+                }
+                statusText = "Reopening Codex…"
+                try await codexService.launchCodex(at: applicationURL)
+                _ = await refreshUsage(showErrors: false)
+                if let taskScanError {
+                    statusText = "Switched account; task recovery scan failed"
+                    errorMessage = taskScanError
+                } else if recoveryResult.failures.isEmpty {
+                    statusText = tasks.isEmpty
+                        ? "Switched to \(candidate.displayName)"
+                        : "Switched account; continued \(recoveryResult.succeeded) task(s)"
+                } else {
+                    statusText = "Switched account; \(recoveryResult.succeeded)/\(recoveryResult.attempted) task(s) continued"
+                    errorMessage = recoveryResult.failures.joined(separator: "\n")
+                }
+            } catch {
+                try? await codexService.launchCodex(at: applicationURL)
+                throw error
+            }
+        } catch {
+            statusText = "Automatic account switch failed"
+            errorMessage = error.localizedDescription
         }
     }
 

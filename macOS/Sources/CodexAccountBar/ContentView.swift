@@ -11,6 +11,7 @@ struct ContentView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    autoFailoverSection
                     accountSection
                     providerSection
                 }
@@ -28,6 +29,29 @@ struct ContentView: View {
         } message: {
             Text(store.errorMessage ?? "")
         }
+    }
+
+    private var autoFailoverSection: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
+                .foregroundStyle(.tint)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Automatic quota failover")
+                    .font(.subheadline.weight(.semibold))
+                Text("Switch to the saved account with the most usable quota and continue only tasks stopped by a usage-limit error.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Toggle("Automatic quota failover", isOn: $store.autoFailoverEnabled)
+                .labelsHidden()
+                .disabled(store.isAutoRecovering)
+                .accessibilityHint("Automatically changes account and resumes quota-limited tasks")
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var header: some View {

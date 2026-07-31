@@ -76,6 +76,11 @@ final class CodexService {
     }
 
     func restartCodex() async throws {
+        let applicationURL = try await terminateCodex()
+        try await launchCodex(at: applicationURL)
+    }
+
+    func terminateCodex() async throws -> URL {
         let running = NSRunningApplication.runningApplications(
             withBundleIdentifier: "com.openai.codex"
         )
@@ -90,15 +95,18 @@ final class CodexService {
                 isTerminated: { app.isTerminated }
             )
         }
-        try await ApplicationRestartCoordinator().restart(targets: targets) {
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = true
-            configuration.createsNewApplicationInstance = true
-            _ = try await NSWorkspace.shared.openApplication(
-                at: applicationURL.resolvingSymlinksInPath(),
-                configuration: configuration
-            )
-        }
+        try await ApplicationRestartCoordinator().terminate(targets: targets)
+        return applicationURL
+    }
+
+    func launchCodex(at applicationURL: URL) async throws {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        configuration.createsNewApplicationInstance = true
+        _ = try await NSWorkspace.shared.openApplication(
+            at: applicationURL.resolvingSymlinksInPath(),
+            configuration: configuration
+        )
     }
 
     private func installedCodexURL() -> URL? {
@@ -107,7 +115,7 @@ final class CodexService {
             .first { fileManager.fileExists(atPath: $0.path) }
     }
 
-    private func findCodexCLI() throws -> URL {
+    func findCodexCLI() throws -> URL {
         let candidates = [
             "/Applications/ChatGPT.app/Contents/Resources/codex",
             "/Applications/Codex.app/Contents/Resources/codex",

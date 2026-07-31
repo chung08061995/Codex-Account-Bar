@@ -26,6 +26,11 @@ adds provider profiles for opencodex:
   quota once, so refreshing the list does not require switching every account.
 - Eligible banked rate-limit resets are displayed and automatically redeemed
   only after Codex reports that quota is exhausted.
+- Automatic quota failover checks the active account every minute. When quota is
+  exhausted, it selects the saved account with the most usable quota, switches
+  securely, and uses the official Codex CLI to continue recent tasks whose last
+  turn failed specifically with `usageLimitExceeded`. The feature can be turned
+  off from the app; intentionally interrupted tasks are never resumed.
 - The active ChatGPT account's remaining quota is also shown as a compact ring
   and percentage directly in the macOS menu bar.
 - Provider API keys are stored in a separate macOS Keychain service.
@@ -62,6 +67,9 @@ opencodex version.
   expired saved access token is renewed before retrying. An applicable reset is
   redeemed automatically only when quota is exhausted.
 - Detects and toggles 9Router as a Windows service, Docker container named `9router`, or global npm CLI.
+- Includes the same automatic quota failover and safe task-recovery policy as
+  macOS. If the Codex CLI cannot be found, account switching still completes and
+  the app reports that task continuation must be done manually.
 
 ## Build on Windows 10/11
 

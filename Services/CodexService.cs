@@ -10,7 +10,8 @@ public sealed class CodexService
         void Flush(){if(section.Count==0)return;var block=string.Join("\n",section);if(!block.Contains("9router",StringComparison.OrdinalIgnoreCase)&&!block.Contains("localhost:20128",StringComparison.OrdinalIgnoreCase)&&!block.Contains("127.0.0.1:20128",StringComparison.OrdinalIgnoreCase))output.AddRange(section);section.Clear();}
         foreach(var line in lines){var trimmed=line.Trim();if(trimmed.StartsWith('[')){Flush();section.Add(line);continue;}if(section.Count>0){section.Add(line);continue;}if(trimmed.StartsWith("model_provider",StringComparison.OrdinalIgnoreCase)&&(trimmed.Contains("9router",StringComparison.OrdinalIgnoreCase)||trimmed.Contains("router",StringComparison.OrdinalIgnoreCase)))continue;if((trimmed.StartsWith("base_url",StringComparison.OrdinalIgnoreCase)||trimmed.StartsWith("api_base",StringComparison.OrdinalIgnoreCase))&&(trimmed.Contains(":20128",StringComparison.OrdinalIgnoreCase)||trimmed.Contains("9router",StringComparison.OrdinalIgnoreCase)))continue;output.Add(line);}Flush();var updated=string.Join(Environment.NewLine,output).TrimEnd()+Environment.NewLine;if(updated!=string.Join(Environment.NewLine,lines).TrimEnd()+Environment.NewLine){var backup=path+".codex-bar.bak";File.Copy(path,backup,true);await File.WriteAllTextAsync(path+".tmp",updated);File.Move(path+".tmp",path,true);}
     }
-    public async Task WriteAndRestartAsync(string json){Directory.CreateDirectory(CodexHome);var normalized=NormalizeAuth(json);var temp=AuthPath+".cab.tmp";await File.WriteAllTextAsync(temp,normalized);File.Move(temp,AuthPath,true);if(!await Restart())throw new InvalidOperationException("The account was saved, but Codex Desktop could not be restarted. Close and reopen Codex manually.");}
+    public async Task WriteAuthAsync(string json){Directory.CreateDirectory(CodexHome);var normalized=NormalizeAuth(json);var temp=AuthPath+".cab.tmp";await File.WriteAllTextAsync(temp,normalized);File.Move(temp,AuthPath,true);}
+    public async Task WriteAndRestartAsync(string json){await WriteAuthAsync(json);var target=await TerminateAsync();if(!await LaunchAsync(target))throw new InvalidOperationException("The account was saved, but Codex Desktop could not be restarted. Close and reopen Codex manually.");}
     public async Task<string> LoginIsolatedAsync()
     {
         const string clientId="app_EMoamEEZ73f0CkXaXp7hrann";var verifier=Base64Url(RandomNumberGenerator.GetBytes(32));var challenge=Base64Url(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));var state=Base64Url(RandomNumberGenerator.GetBytes(32));
@@ -19,11 +20,47 @@ public sealed class CodexService
     }
     private static string Base64Url(byte[] bytes)=>Convert.ToBase64String(bytes).TrimEnd('=').Replace('+','-').Replace('/','_');
     private static string NormalizeAuth(string json){var root=JsonNode.Parse(json)?.AsObject()??throw new InvalidDataException("Invalid Codex auth file.");var accountId=AuthInspector.Inspect(json).AccountId;if(accountId is not null&&root["tokens"] is JsonObject tokens)tokens["account_id"]=accountId;return root.ToJsonString();}
-    private static async Task<bool> Restart()
+    public string? FindCodexCli()
     {
-        var current=Environment.ProcessId;var apps=Process.GetProcesses().Where(p=>p.Id!=current).Select(p=>{try{return (p,p.MainModule?.FileName);}catch{return (p,null);}}).Where(x=>x.Item2 is not null&&(x.Item2.Contains("\\WindowsApps\\OpenAI.Codex_",StringComparison.OrdinalIgnoreCase)||x.Item2.Contains("\\OpenAI\\Codex\\",StringComparison.OrdinalIgnoreCase))).ToList();var desktopPath=apps.Select(x=>x.Item2).FirstOrDefault(x=>string.Equals(Path.GetFileName(x),"ChatGPT.exe",StringComparison.OrdinalIgnoreCase));
-        foreach(var (p,_) in apps){try{p.Kill(true);await p.WaitForExitAsync();}catch{}finally{p.Dispose();}}await Task.Delay(700);
-        try{Process.Start(new ProcessStartInfo("explorer.exe"){UseShellExecute=true,ArgumentList={"shell:AppsFolder\\OpenAI.Codex_2p2nqsd0c76g0!App"}});}catch{}await Task.Delay(1800);if(IsDesktopRunning())return true;if(desktopPath is not null)try{Process.Start(new ProcessStartInfo(desktopPath){UseShellExecute=true});}catch{}await Task.Delay(1800);return IsDesktopRunning();
+        var running = Process.GetProcesses().Select(process =>
+        {
+            try { return (Process: process, Path: process.MainModule?.FileName); }
+            catch { return (Process: process, Path: (string?)null); }
+        }).ToList();
+        try
+        {
+            var live = running.Select(item => item.Path).FirstOrDefault(path =>
+                path is not null && string.Equals(Path.GetFileName(path), "codex.exe", StringComparison.OrdinalIgnoreCase));
+            if (live is not null) return live;
+            var roots = running.Select(item => item.Path).Where(path => path is not null).Select(path => Path.GetDirectoryName(path!)).Where(path => path is not null).Distinct(StringComparer.OrdinalIgnoreCase);
+            foreach (var root in roots)
+            {
+                foreach (var candidate in new[] { Path.Combine(root!, "codex.exe"), Path.Combine(root!, "resources", "codex.exe") })
+                    if (File.Exists(candidate)) return candidate;
+            }
+            foreach (var candidate in new[]
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Codex", "resources", "codex.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "OpenAI", "Codex", "resources", "codex.exe")
+            }) if (File.Exists(candidate)) return candidate;
+            return null;
+        }
+        finally { foreach (var item in running) item.Process.Dispose(); }
     }
+
+    public async Task<CodexLaunchTarget> TerminateAsync()
+    {
+        var current=Environment.ProcessId;var apps=Process.GetProcesses().Where(p=>p.Id!=current).Select(p=>{try{return (p,p.MainModule?.FileName);}catch{return (p,null);}}).Where(x=>IsCodexPath(x.Item2)).ToList();var desktopPath=apps.Select(x=>x.Item2).FirstOrDefault(x=>string.Equals(Path.GetFileName(x),"ChatGPT.exe",StringComparison.OrdinalIgnoreCase));
+        foreach(var (p,_) in apps){try{p.Kill(true);await p.WaitForExitAsync();}catch{}finally{p.Dispose();}}await Task.Delay(700);return new CodexLaunchTarget(desktopPath);
+    }
+
+    public async Task<bool> LaunchAsync(CodexLaunchTarget target)
+    {
+        try{Process.Start(new ProcessStartInfo("explorer.exe"){UseShellExecute=true,ArgumentList={"shell:AppsFolder\\OpenAI.Codex_2p2nqsd0c76g0!App"}});}catch{}await Task.Delay(1800);if(IsDesktopRunning())return true;if(target.DesktopPath is not null)try{Process.Start(new ProcessStartInfo(target.DesktopPath){UseShellExecute=true});}catch{}await Task.Delay(1800);return IsDesktopRunning();
+    }
+
+    private static bool IsCodexPath(string? path)=>path is not null&&(path.Contains("\\WindowsApps\\OpenAI.Codex_",StringComparison.OrdinalIgnoreCase)||path.Contains("\\OpenAI\\Codex\\",StringComparison.OrdinalIgnoreCase));
     private static bool IsDesktopRunning()=>Process.GetProcesses().Any(p=>{try{var path=p.MainModule?.FileName;return path is not null&&(path.Contains("\\WindowsApps\\OpenAI.Codex_",StringComparison.OrdinalIgnoreCase)||path.Contains("\\OpenAI\\Codex\\",StringComparison.OrdinalIgnoreCase));}catch{return false;}finally{p.Dispose();}});
 }
+
+public sealed record CodexLaunchTarget(string? DesktopPath);
