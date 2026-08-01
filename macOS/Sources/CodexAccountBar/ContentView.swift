@@ -214,13 +214,21 @@ struct ContentView: View {
                 .lineLimit(1)
             Spacer()
             if store.isBusy {
-                Button(store.isAddingAccount ? "Cancel sign-in" : "Cancel operation", role: .cancel) {
+                Button(store.isAddingAccount ? "Cancel sign-in" : "Cancel", role: .cancel) {
                     store.cancelCurrentOperation()
                 }
                 .buttonStyle(.plain)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.red)
                 .fixedSize(horizontal: true, vertical: false)
+                Button("Force Quit Bar", role: .destructive) {
+                    NSApplication.shared.terminate(nil)
+                }
+                .buttonStyle(.plain)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: true, vertical: false)
+                .help("Immediately quit Codex Account Bar without closing Codex")
             } else {
                 Button("Quit") { NSApplication.shared.terminate(nil) }
                     .buttonStyle(.plain)

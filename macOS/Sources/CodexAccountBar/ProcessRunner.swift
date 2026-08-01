@@ -40,6 +40,7 @@ enum ProcessRunner {
 
             let state = LockedContinuation(continuation)
             process.terminationHandler = { process in
+                try? pipe?.fileHandleForWriting.close()
                 let data = pipe?.fileHandleForReading.readDataToEndOfFile() ?? Data()
                 state.resume(.success(ProcessResult(
                     exitCode: process.terminationStatus,
@@ -50,6 +51,7 @@ enum ProcessRunner {
             do {
                 try process.run()
             } catch {
+                try? pipe?.fileHandleForWriting.close()
                 state.resume(.failure(error))
                 return
             }
