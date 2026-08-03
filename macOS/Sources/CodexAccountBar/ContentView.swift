@@ -114,7 +114,7 @@ struct ContentView: View {
                     )
                     VStack(spacing: 10) {
                         HStack {
-                            statusDot(active: isActive, warning: presentation.requiresSignIn)
+                            statusDot(active: isActive, warning: presentation.credentialRejected)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(account.displayName).lineLimit(1)
                                 Text(account.plan.uppercased())
@@ -133,11 +133,7 @@ struct ContentView: View {
                                 .help("Remove this saved account from Codex Account Bar")
                             } else {
                                 Button(presentation.actionTitle) {
-                                    if presentation.requiresSignIn {
-                                        store.reauthenticateAccount(account)
-                                    } else {
-                                        store.activateAccount(account)
-                                    }
+                                    store.activateAccount(account)
                                 }
                                 .disabled(presentation.actionDisabled)
                                 Button {
@@ -156,7 +152,7 @@ struct ContentView: View {
                         } else if let notice = presentation.notice {
                             AccountCredentialNotice(
                                 text: notice,
-                                warning: presentation.requiresSignIn
+                                warning: presentation.credentialRejected
                             )
                         }
                     }
@@ -269,16 +265,14 @@ struct AccountRowPresentation {
     let actionTitle: String
     let actionDisabled: Bool
     let notice: String?
-    let requiresSignIn: Bool
+    let credentialRejected: Bool
 
     init(account: SavedAccount, isActive: Bool, isBusy: Bool) {
-        requiresSignIn = account.needsSignIn
-        if requiresSignIn {
-            actionTitle = "Sign In"
-            actionDisabled = isBusy
-            notice = account.needsSignIn
-                ? "Session expired. Sign in again to load quota."
-                : "Sign in to verify this saved session and load quota."
+        credentialRejected = account.needsSignIn
+        if credentialRejected {
+            actionTitle = "Unavailable"
+            actionDisabled = true
+            notice = "Saved session was rejected (401). Bar will not switch or sign in automatically."
         } else {
             actionTitle = isActive ? "Active" : "Switch"
             actionDisabled = isBusy || isActive

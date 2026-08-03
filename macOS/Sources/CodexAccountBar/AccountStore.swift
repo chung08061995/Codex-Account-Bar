@@ -147,10 +147,6 @@ final class AccountStore: ObservableObject {
         startAccountLogin(expectedAccount: nil)
     }
 
-    func reauthenticateAccount(_ account: SavedAccount) {
-        startAccountLogin(expectedAccount: account)
-    }
-
     private func startAccountLogin(expectedAccount: SavedAccount?) {
         guard !isBusy else { return }
         isBusy = true
