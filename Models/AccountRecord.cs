@@ -9,6 +9,7 @@ public sealed class AccountRecord : INotifyPropertyChanged
     public string Plan { get; set; } = "ChatGPT";
     public DateTimeOffset AddedAt { get; init; } = DateTimeOffset.UtcNow;
     public bool IsActive { get; set; }
+    public bool HasUsage { get; set; }
 
     public string PrimaryTitle { get; set; } = "Quota";
     public double PrimaryUsed { get; set; }

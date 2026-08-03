@@ -167,25 +167,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var activeIdentity = activeAuth is null ? null : AuthInspector.Inspect(activeAuth);
             foreach (var account in Accounts)
             {
+                var usesActiveAuth = false;
                 try
                 {
-                    var usesActiveAuth = activeAuth is not null
+                    usesActiveAuth = activeAuth is not null
                         && account.Email.Equals(activeIdentity?.Email, StringComparison.OrdinalIgnoreCase);
                     var auth = usesActiveAuth ? activeAuth! : await _vault.ReadAuthAsync(account.Id);
-                    if (usesActiveAuth)
-                    {
-                        await _vault.SaveAsync(auth);
-                    }
                     var refreshed = await _usage.FetchRefreshingCredentialAsync(auth);
-                    if (!string.Equals(refreshed.AuthJson, auth, StringComparison.Ordinal))
-                    {
-                        await _vault.SaveAsync(refreshed.AuthJson);
-                    }
+                    await CommitRefreshedCredentialAsync(account, auth, refreshed.AuthJson);
                     ApplyUsage(account, refreshed.Usage);
                 }
                 catch (Exception e)
                 {
                     succeeded = false;
+                    if (!usesActiveAuth && IsCredentialFailure(e)) account.HasUsage = false;
                     account.StatusText = e.Message;
                     AppLog.Error($"Refresh usage for {account.Email}", e);
                 }
@@ -297,6 +292,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         Message = $"Switching to {account.Email}…";
         try
         {
+            await PersistActiveCredentialToVaultAsync();
             var savedAuth = await _vault.ReadAuthAsync(account.Id);
             var refreshedCredential = await _usage.FetchRefreshingCredentialAsync(savedAuth);
             if (!string.Equals(refreshedCredential.AuthJson, savedAuth, StringComparison.Ordinal))
@@ -361,8 +357,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 ? activeAuth
                 : await _vault.ReadAuthAsync(active.Id);
             var refreshed = await _usage.FetchRefreshingCredentialAsync(auth);
-            if (!string.Equals(refreshed.AuthJson, auth, StringComparison.Ordinal))
-                await _vault.SaveAsync(refreshed.AuthJson);
+            await CommitRefreshedCredentialAsync(active, auth, refreshed.AuthJson);
             ApplyUsage(active, refreshed.Usage);
             active.NotifyAll();
             if (QuotaFailoverPolicy.IsExhausted(active))
@@ -385,6 +380,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         Message = "Quota exhausted; checking other accounts…";
         try
         {
+            await PersistActiveCredentialToVaultAsync();
             await RefreshAllAsync();
             if (!QuotaFailoverPolicy.IsExhausted(exhaustedAccount))
             {
@@ -470,6 +466,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private static void ApplyUsage(AccountRecord account, UsageResult usage)
     {
+        account.HasUsage = true;
         account.PrimaryTitle = usage.Primary.Title;
         account.PrimaryUsed = usage.Primary.UsedPercent;
         account.PrimaryReset = usage.Primary.ResetText;
@@ -485,6 +482,57 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ? "Quota exhausted; available reset applied"
             : "Usage refreshed";
     }
+
+    private async Task PersistActiveCredentialToVaultAsync()
+    {
+        var activeAuth = await _codex.ReadActiveAuthAsync();
+        if (activeAuth is null) return;
+        var identity = AuthInspector.Inspect(activeAuth);
+        if (Accounts.Any(account => account.Email.Equals(
+            identity.Email,
+            StringComparison.OrdinalIgnoreCase
+        )))
+        {
+            await _vault.SaveAsync(activeAuth);
+        }
+    }
+
+    private async Task CommitRefreshedCredentialAsync(
+        AccountRecord account,
+        string sourceAuth,
+        string refreshedAuth
+    )
+    {
+        var latestActive = await _codex.ReadActiveAuthAsync();
+        var accountIsActive = latestActive is not null
+            && account.Email.Equals(
+                AuthInspector.Inspect(latestActive).Email,
+                StringComparison.OrdinalIgnoreCase
+            );
+
+        string savedAuth;
+        if (!accountIsActive)
+        {
+            savedAuth = refreshedAuth;
+        }
+        else if (!string.Equals(latestActive, sourceAuth, StringComparison.Ordinal))
+        {
+            // Codex refreshed concurrently; its newer credential wins.
+            savedAuth = latestActive!;
+        }
+        else
+        {
+            // Update the live Codex auth before the vault so a crash cannot leave
+            // Codex holding a refresh token that Bar already rotated.
+            await _codex.WriteAuthAsync(refreshedAuth);
+            savedAuth = refreshedAuth;
+        }
+        await _vault.SaveAsync(savedAuth);
+    }
+
+    private static bool IsCredentialFailure(Exception exception) =>
+        exception is System.Net.Http.HttpRequestException
+        { StatusCode: System.Net.HttpStatusCode.Unauthorized };
 
     private void Hide_Click(object sender, RoutedEventArgs e) => Hide();
     private void Settings_Click(object sender, RoutedEventArgs e) =>

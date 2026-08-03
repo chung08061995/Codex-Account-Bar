@@ -224,7 +224,7 @@ final class AccountStore: ObservableObject {
         let externalService = providerUsageService
         let activeAuth = codexService.readActiveAuthData()
 
-        await withTaskGroup(of: (String, Result<AccountUsageRefresh, Error>).self) { group in
+        await withTaskGroup(of: (String, Data?, Result<AccountUsageRefresh, Error>).self) { group in
             for account in accounts {
                 group.addTask {
                     do {
@@ -239,34 +239,36 @@ final class AccountStore: ObservableObject {
                             savedAuth: savedAuth,
                             activeAuth: activeAuth
                         )
-                        if auth != savedAuth {
-                            try KeychainStore.write(
-                                auth,
-                                service: KeychainStore.accountService,
-                                account: account.id
-                            )
-                        }
                         let refreshed = try await service.fetchRefreshingCredential(authData: auth)
-                        if refreshed.authData != auth {
-                            try KeychainStore.write(
-                                refreshed.authData,
-                                service: KeychainStore.accountService,
-                                account: account.id
-                            )
-                        }
-                        return (account.id, .success(refreshed))
+                        return (account.id, auth, .success(refreshed))
                     } catch {
-                        return (account.id, .failure(error))
+                        return (account.id, nil, .failure(error))
                     }
                 }
             }
 
-            for await (accountID, result) in group {
+            for await (accountID, sourceAuth, result) in group {
                 guard let index = accounts.firstIndex(where: { $0.id == accountID }) else { continue }
                 switch result {
                 case .success(let refreshed):
-                    accounts[index].usage = refreshed.usage
+                    do {
+                        guard let sourceAuth else { throw UsageServiceError.invalidAuth }
+                        try commitRefreshedCredential(
+                            accountID: accountID,
+                            sourceAuth: sourceAuth,
+                            refreshedAuth: refreshed.authData
+                        )
+                        accounts[index].usage = refreshed.usage
+                    } catch {
+                        failures.append(error.localizedDescription)
+                    }
                 case .failure(let error):
+                    if accountID != activeAccountID,
+                       AccountAuthenticationFailure.isCredentialFailure(error) {
+                        // Never auto-switch using a stale cached 100% quota whose login
+                        // can no longer be refreshed.
+                        accounts[index].usage = nil
+                    }
                     failures.append(error.localizedDescription)
                 }
             }
@@ -317,6 +319,7 @@ final class AccountStore: ObservableObject {
 
     func activateAccount(_ account: SavedAccount) {
         perform {
+            try self.persistActiveCredentialToKeychain()
             self.statusText = "Checking \(account.displayName)…"
             guard let savedAuth = try KeychainStore.read(
                 service: KeychainStore.accountService,
@@ -351,6 +354,7 @@ final class AccountStore: ObservableObject {
 
     func activateProvider(_ profile: ProviderProfile) {
         perform {
+            try self.persistActiveCredentialToKeychain()
             try await self.providerService.activate(
                 profile: profile,
                 allProfiles: self.providers
@@ -388,13 +392,11 @@ final class AccountStore: ObservableObject {
                 activeAuth: codexService.readActiveAuthData()
             )
             let refreshed = try await usageService.fetchRefreshingCredential(authData: auth)
-            if refreshed.authData != savedAuth {
-                try KeychainStore.write(
-                    refreshed.authData,
-                    service: KeychainStore.accountService,
-                    account: activeAccountID
-                )
-            }
+            try commitRefreshedCredential(
+                accountID: activeAccountID,
+                sourceAuth: auth,
+                refreshedAuth: refreshed.authData
+            )
             accounts[index].usage = refreshed.usage
             persistAccounts()
             guard QuotaFailoverPolicy.isExhausted(refreshed.usage) else { return }
@@ -417,6 +419,14 @@ final class AccountStore: ObservableObject {
         defer {
             isBusy = false
             isAutoRecovering = false
+        }
+
+        do {
+            try persistActiveCredentialToKeychain()
+        } catch {
+            statusText = "Automatic account switch failed"
+            errorMessage = error.localizedDescription
+            return
         }
 
         statusText = "Quota exhausted; checking other accounts…"
@@ -537,6 +547,41 @@ final class AccountStore: ObservableObject {
                 statusText = "Activation failed"
             }
         }
+    }
+
+    private func persistActiveCredentialToKeychain() throws {
+        guard let activeAuth = codexService.readActiveAuthData(),
+              let accountID = AccountCredentialResolver.authAccountID(activeAuth),
+              accounts.contains(where: { $0.id == accountID })
+        else { return }
+        try KeychainStore.write(
+            activeAuth,
+            service: KeychainStore.accountService,
+            account: accountID
+        )
+    }
+
+    private func commitRefreshedCredential(
+        accountID: String,
+        sourceAuth: Data,
+        refreshedAuth: Data
+    ) throws {
+        let commit = AccountCredentialResolver.refreshCommit(
+            accountID: accountID,
+            sourceAuth: sourceAuth,
+            refreshedAuth: refreshedAuth,
+            latestActiveAuth: codexService.readActiveAuthData()
+        )
+        // Keep Codex's live auth ahead of Keychain so a crash cannot leave
+        // the running app holding a refresh token that Bar already rotated.
+        if let activeAuth = commit.activeAuth {
+            try codexService.activateAccount(authData: activeAuth)
+        }
+        try KeychainStore.write(
+            commit.savedAuth,
+            service: KeychainStore.accountService,
+            account: accountID
+        )
     }
 
     private func persistProviders() {

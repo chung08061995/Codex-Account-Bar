@@ -23,7 +23,7 @@ public static class QuotaFailoverPolicy
 
     public static double? EffectiveRemaining(AccountRecord? account)
     {
-        if (account is null) return null;
+        if (account is null || !account.HasUsage) return null;
         var remaining = account.PrimaryLeft;
         if (account.HasSecondary) remaining = Math.Min(remaining, account.SecondaryLeft);
         return remaining;

@@ -1,5 +1,10 @@
 import Foundation
 
+struct AccountCredentialCommit: Equatable {
+    let savedAuth: Data
+    let activeAuth: Data?
+}
+
 enum AccountCredentialResolver {
     static func resolve(accountID: String, savedAuth: Data, activeAuth: Data?) -> Data {
         guard let activeAuth, authAccountID(activeAuth) == accountID else {
@@ -15,6 +20,36 @@ enum AccountCredentialResolver {
             return nil
         }
         return tokens["account_id"] as? String
+    }
+
+    static func refreshCommit(
+        accountID: String,
+        sourceAuth: Data,
+        refreshedAuth: Data,
+        latestActiveAuth: Data?
+    ) -> AccountCredentialCommit {
+        guard let latestActiveAuth,
+              authAccountID(latestActiveAuth) == accountID
+        else {
+            return AccountCredentialCommit(savedAuth: refreshedAuth, activeAuth: nil)
+        }
+
+        guard latestActiveAuth == sourceAuth else {
+            return AccountCredentialCommit(savedAuth: latestActiveAuth, activeAuth: nil)
+        }
+        return AccountCredentialCommit(savedAuth: refreshedAuth, activeAuth: refreshedAuth)
+    }
+}
+
+enum AccountAuthenticationFailure {
+    static func isCredentialFailure(_ error: Error) -> Bool {
+        if case AuthTokenRefreshError.requestFailed(let status) = error {
+            return status == 401
+        }
+        if case UsageServiceError.requestFailed(let status) = error {
+            return status == 401
+        }
+        return false
     }
 }
 
