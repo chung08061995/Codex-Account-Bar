@@ -13,13 +13,13 @@ public sealed class AccountRecord : INotifyPropertyChanged
     public bool HasUsage { get; set; }
     public bool RequiresSignIn { get; set; }
 
-    public string PrimaryActionText => RequiresSignIn || !HasUsage ? "Sign In" : IsActive ? "Active" : "Switch";
-    public bool CanPrimaryAction => RequiresSignIn || !HasUsage || !IsActive;
+    public string PrimaryActionText => RequiresSignIn ? "Sign In" : IsActive ? "Active" : "Switch";
+    public bool CanPrimaryAction => RequiresSignIn || !IsActive;
     public Visibility UsageVisibility => HasUsage ? Visibility.Visible : Visibility.Collapsed;
     public Visibility MissingUsageVisibility => HasUsage ? Visibility.Collapsed : Visibility.Visible;
     public string MissingUsageText => RequiresSignIn
         ? "Session expired. Sign in again to load quota."
-        : "Sign in to verify this saved session and load quota.";
+        : "Quota unavailable. Refresh to try again.";
 
     public string PrimaryTitle { get; set; } = "Quota";
     public double PrimaryUsed { get; set; }

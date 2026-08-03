@@ -47,7 +47,7 @@ final class AccountStore: ObservableObject {
     }
 
     init() {
-        autoFailoverEnabled = UserDefaults.standard.object(forKey: Self.autoFailoverKey) as? Bool ?? true
+        autoFailoverEnabled = UserDefaults.standard.object(forKey: Self.autoFailoverKey) as? Bool ?? false
         load()
         Task { await refreshUsage(showErrors: false) }
         refreshLoopTask = Task { [weak self] in

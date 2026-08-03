@@ -9,7 +9,7 @@ public static class AppSettingsStore
     public static bool ReadAutoFailoverEnabled()
     {
         using var key = Registry.CurrentUser.OpenSubKey(RegistryPath);
-        return key?.GetValue("AutoFailoverEnabled") is int value ? value != 0 : true;
+        return key?.GetValue("AutoFailoverEnabled") is int value && value != 0;
     }
 
     public static void WriteAutoFailoverEnabled(bool enabled)

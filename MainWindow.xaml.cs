@@ -289,7 +289,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private async void Switch_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as WpfButton)?.Tag is not AccountRecord account) return;
-        if (account.RequiresSignIn || !account.HasUsage)
+        if (account.RequiresSignIn)
         {
             await ReauthenticateAccountAsync(account);
             return;

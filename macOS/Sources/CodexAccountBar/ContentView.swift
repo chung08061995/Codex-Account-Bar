@@ -272,7 +272,7 @@ struct AccountRowPresentation {
     let requiresSignIn: Bool
 
     init(account: SavedAccount, isActive: Bool, isBusy: Bool) {
-        requiresSignIn = account.needsSignIn || account.usage == nil
+        requiresSignIn = account.needsSignIn
         if requiresSignIn {
             actionTitle = "Sign In"
             actionDisabled = isBusy
@@ -282,7 +282,7 @@ struct AccountRowPresentation {
         } else {
             actionTitle = isActive ? "Active" : "Switch"
             actionDisabled = isBusy || isActive
-            notice = nil
+            notice = account.usage == nil ? "Quota unavailable. Refresh to try again." : nil
         }
     }
 }
