@@ -106,9 +106,15 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(store.accounts) { account in
+                    let isActive = store.activeAccountID == account.id
+                    let presentation = AccountRowPresentation(
+                        account: account,
+                        isActive: isActive,
+                        isBusy: store.isBusy
+                    )
                     VStack(spacing: 10) {
                         HStack {
-                            statusDot(active: store.activeAccountID == account.id)
+                            statusDot(active: isActive, warning: presentation.requiresSignIn)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(account.displayName).lineLimit(1)
                                 Text(account.plan.uppercased())
@@ -126,10 +132,14 @@ struct ContentView: View {
                                 }
                                 .help("Remove this saved account from Codex Account Bar")
                             } else {
-                                Button(store.activeAccountID == account.id ? "Active" : "Switch") {
-                                    store.activateAccount(account)
+                                Button(presentation.actionTitle) {
+                                    if presentation.requiresSignIn {
+                                        store.reauthenticateAccount(account)
+                                    } else {
+                                        store.activateAccount(account)
+                                    }
                                 }
-                                .disabled(store.isBusy || store.activeAccountID == account.id)
+                                .disabled(presentation.actionDisabled)
                                 Button {
                                     accountToDelete = account
                                 } label: {
@@ -143,6 +153,11 @@ struct ContentView: View {
                         }
                         if let usage = account.usage, let primary = usage.primary {
                             UsageGrid(usage: usage, primary: primary)
+                        } else if let notice = presentation.notice {
+                            AccountCredentialNotice(
+                                text: notice,
+                                warning: presentation.requiresSignIn
+                            )
                         }
                     }
                     .padding(10)
@@ -243,10 +258,46 @@ struct ContentView: View {
             .font(.subheadline.weight(.semibold))
     }
 
-    private func statusDot(active: Bool) -> some View {
+    private func statusDot(active: Bool, warning: Bool = false) -> some View {
         Circle()
-            .fill(active ? Color.green : Color.secondary.opacity(0.35))
+            .fill(warning ? Color.orange : active ? Color.green : Color.secondary.opacity(0.35))
             .frame(width: 8, height: 8)
+    }
+}
+
+struct AccountRowPresentation {
+    let actionTitle: String
+    let actionDisabled: Bool
+    let notice: String?
+    let requiresSignIn: Bool
+
+    init(account: SavedAccount, isActive: Bool, isBusy: Bool) {
+        requiresSignIn = account.needsSignIn || account.usage == nil
+        if requiresSignIn {
+            actionTitle = "Sign In"
+            actionDisabled = isBusy
+            notice = account.needsSignIn
+                ? "Session expired. Sign in again to load quota."
+                : "Sign in to verify this saved session and load quota."
+        } else {
+            actionTitle = isActive ? "Active" : "Switch"
+            actionDisabled = isBusy || isActive
+            notice = nil
+        }
+    }
+}
+
+struct AccountCredentialNotice: View {
+    let text: String
+    let warning: Bool
+
+    var body: some View {
+        Label(text, systemImage: warning ? "exclamationmark.triangle.fill" : "arrow.clockwise")
+            .font(.caption2)
+            .foregroundStyle(warning ? Color.orange : Color.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel(text)
     }
 }
 

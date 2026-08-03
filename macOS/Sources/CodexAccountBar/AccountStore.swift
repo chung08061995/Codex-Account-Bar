@@ -144,6 +144,14 @@ final class AccountStore: ObservableObject {
     }
 
     func addAccount() {
+        startAccountLogin(expectedAccount: nil)
+    }
+
+    func reauthenticateAccount(_ account: SavedAccount) {
+        startAccountLogin(expectedAccount: account)
+    }
+
+    private func startAccountLogin(expectedAccount: SavedAccount?) {
         guard !isBusy else { return }
         isBusy = true
         isAddingAccount = true
@@ -158,18 +166,30 @@ final class AccountStore: ObservableObject {
             do {
                 let result = try await codexService.loginIsolated()
                 try Task.checkCancellation()
+                if let expectedAccount, result.account.id != expectedAccount.id {
+                    throw AccountStoreError.unexpectedAccount(expectedAccount.displayName)
+                }
                 try KeychainStore.write(
                     result.authData,
                     service: KeychainStore.accountService,
                     account: result.account.id
                 )
                 if let index = accounts.firstIndex(where: { $0.id == result.account.id }) {
-                    accounts[index] = result.account
+                    var updated = result.account
+                    updated.label = accounts[index].label
+                    updated.lastWarmupAt = accounts[index].lastWarmupAt
+                    updated.credentialStatus = .ready
+                    accounts[index] = updated
                 } else {
-                    accounts.append(result.account)
+                    var added = result.account
+                    added.credentialStatus = .ready
+                    accounts.append(added)
                 }
                 persistAccounts()
-                statusText = "Added \(result.account.displayName)"
+                _ = await refreshUsage(showErrors: false)
+                statusText = expectedAccount == nil
+                    ? "Added \(result.account.displayName)"
+                    : "Signed in to \(result.account.displayName)"
             } catch is CancellationError {
                 statusText = "Sign-in cancelled"
             } catch {
@@ -224,25 +244,44 @@ final class AccountStore: ObservableObject {
         let externalService = providerUsageService
         let activeAuth = codexService.readActiveAuthData()
 
-        await withTaskGroup(of: (String, Data?, Result<AccountUsageRefresh, Error>).self) { group in
-            for account in accounts {
+        // Security.framework can serialize or prompt generic-password reads. A burst
+        // of simultaneous SecItemCopyMatching calls can therefore block every quota
+        // worker. Snapshot credentials one at a time, then parallelize only HTTP.
+        var accountRefreshInputs: [(id: String, auth: Data)] = []
+        var keychainTimedOut = false
+        for account in accounts {
+            do {
+                guard let savedAuth = try await KeychainStore.read(
+                    service: KeychainStore.accountService,
+                    account: account.id
+                ) else {
+                    throw AccountStoreError.missingCredentials(account.displayName)
+                }
+                accountRefreshInputs.append((
+                    account.id,
+                    AccountCredentialResolver.resolve(
+                        accountID: account.id,
+                        savedAuth: savedAuth,
+                        activeAuth: activeAuth
+                    )
+                ))
+            } catch {
+                failures.append(error.localizedDescription)
+                if error is KeychainReadError {
+                    keychainTimedOut = true
+                    break
+                }
+            }
+        }
+
+        await withTaskGroup(of: (String, Data, Result<AccountUsageRefresh, Error>).self) { group in
+            for input in accountRefreshInputs {
                 group.addTask {
                     do {
-                        guard let savedAuth = try KeychainStore.read(
-                            service: KeychainStore.accountService,
-                            account: account.id
-                        ) else {
-                            throw AccountStoreError.missingCredentials(account.displayName)
-                        }
-                        let auth = AccountCredentialResolver.resolve(
-                            accountID: account.id,
-                            savedAuth: savedAuth,
-                            activeAuth: activeAuth
-                        )
-                        let refreshed = try await service.fetchRefreshingCredential(authData: auth)
-                        return (account.id, auth, .success(refreshed))
+                        let refreshed = try await service.fetchRefreshingCredential(authData: input.auth)
+                        return (input.id, input.auth, .success(refreshed))
                     } catch {
-                        return (account.id, nil, .failure(error))
+                        return (input.id, input.auth, .failure(error))
                     }
                 }
             }
@@ -252,22 +291,22 @@ final class AccountStore: ObservableObject {
                 switch result {
                 case .success(let refreshed):
                     do {
-                        guard let sourceAuth else { throw UsageServiceError.invalidAuth }
                         try commitRefreshedCredential(
                             accountID: accountID,
                             sourceAuth: sourceAuth,
                             refreshedAuth: refreshed.authData
                         )
                         accounts[index].usage = refreshed.usage
+                        accounts[index].credentialStatus = .ready
                     } catch {
                         failures.append(error.localizedDescription)
                     }
                 case .failure(let error):
-                    if accountID != activeAccountID,
-                       AccountAuthenticationFailure.isCredentialFailure(error) {
+                    if AccountAuthenticationFailure.isCredentialFailure(error) {
                         // Never auto-switch using a stale cached 100% quota whose login
                         // can no longer be refreshed.
                         accounts[index].usage = nil
+                        accounts[index].credentialStatus = .signInRequired
                     }
                     failures.append(error.localizedDescription)
                 }
@@ -275,19 +314,33 @@ final class AccountStore: ObservableObject {
         }
 
         let quotaProviders = providers.filter { $0.providerID == "claudible" && $0.requiresAPIKey }
+        var providerRefreshInputs: [(profile: ProviderProfile, apiKey: String)] = []
+        for profile in quotaProviders where !keychainTimedOut {
+            do {
+                guard let data = try await KeychainStore.read(
+                    service: KeychainStore.providerService,
+                    account: profile.id.uuidString
+                ), let apiKey = String(data: data, encoding: .utf8), !apiKey.isEmpty else {
+                    throw AccountStoreError.missingCredentials(profile.name)
+                }
+                providerRefreshInputs.append((profile, apiKey))
+            } catch {
+                failures.append(error.localizedDescription)
+            }
+        }
         await withTaskGroup(of: (UUID, Result<UsageSnapshot, Error>).self) { group in
-            for profile in quotaProviders {
+            for input in providerRefreshInputs {
                 group.addTask {
                     do {
-                        guard let data = try KeychainStore.read(
-                            service: KeychainStore.providerService,
-                            account: profile.id.uuidString
-                        ), let apiKey = String(data: data, encoding: .utf8), !apiKey.isEmpty else {
-                            throw AccountStoreError.missingCredentials(profile.name)
-                        }
-                        return (profile.id, .success(try await externalService.fetch(profile: profile, apiKey: apiKey)))
+                        return (
+                            input.profile.id,
+                            .success(try await externalService.fetch(
+                                profile: input.profile,
+                                apiKey: input.apiKey
+                            ))
+                        )
                     } catch {
-                        return (profile.id, .failure(error))
+                        return (input.profile.id, .failure(error))
                     }
                 }
             }
@@ -319,36 +372,42 @@ final class AccountStore: ObservableObject {
 
     func activateAccount(_ account: SavedAccount) {
         perform {
-            try self.persistActiveCredentialToKeychain()
-            self.statusText = "Checking \(account.displayName)…"
-            guard let savedAuth = try KeychainStore.read(
-                service: KeychainStore.accountService,
-                account: account.id
-            ) else {
-                throw AccountStoreError.missingCredentials(account.displayName)
-            }
-            let refreshed = try await self.usageService.fetchRefreshingCredential(authData: savedAuth)
-            if refreshed.authData != savedAuth {
-                try KeychainStore.write(
-                    refreshed.authData,
+            do {
+                try self.persistActiveCredentialToKeychain()
+                self.statusText = "Checking \(account.displayName)…"
+                guard let savedAuth = try await KeychainStore.read(
                     service: KeychainStore.accountService,
                     account: account.id
-                )
+                ) else {
+                    throw AccountStoreError.missingCredentials(account.displayName)
+                }
+                let refreshed = try await self.usageService.fetchRefreshingCredential(authData: savedAuth)
+                if refreshed.authData != savedAuth {
+                    try KeychainStore.write(
+                        refreshed.authData,
+                        service: KeychainStore.accountService,
+                        account: account.id
+                    )
+                }
+                if let index = self.accounts.firstIndex(where: { $0.id == account.id }) {
+                    self.accounts[index].usage = refreshed.usage
+                    self.accounts[index].credentialStatus = .ready
+                    self.persistAccounts()
+                }
+                self.statusText = "Switching to \(account.displayName)…"
+                await self.providerService.activateNativeOpenAI { self.statusText = $0 }
+                try self.codexService.activateAccount(authData: refreshed.authData)
+                self.activeProviderID = nil
+                UserDefaults.standard.removeObject(forKey: self.activeProviderKey)
+                self.activeAccountID = account.id
+                self.statusText = "Restarting Codex…"
+                try await self.codexService.restartCodex()
+                _ = await self.refreshUsage(showErrors: false)
+                self.statusText = "Using \(account.displayName)"
+            } catch {
+                self.markCredentialFailure(accountID: account.id, error: error)
+                throw error
             }
-            if let index = self.accounts.firstIndex(where: { $0.id == account.id }) {
-                self.accounts[index].usage = refreshed.usage
-                self.persistAccounts()
-            }
-            self.statusText = "Switching to \(account.displayName)…"
-            await self.providerService.activateNativeOpenAI { self.statusText = $0 }
-            try self.codexService.activateAccount(authData: refreshed.authData)
-            self.activeProviderID = nil
-            UserDefaults.standard.removeObject(forKey: self.activeProviderKey)
-            self.activeAccountID = account.id
-            self.statusText = "Restarting Codex…"
-            try await self.codexService.restartCodex()
-            _ = await self.refreshUsage(showErrors: false)
-            self.statusText = "Using \(account.displayName)"
         }
     }
 
@@ -380,7 +439,7 @@ final class AccountStore: ObservableObject {
         else { return }
 
         do {
-            guard let savedAuth = try KeychainStore.read(
+            guard let savedAuth = try await KeychainStore.read(
                 service: KeychainStore.accountService,
                 account: activeAccountID
             ) else {
@@ -398,10 +457,12 @@ final class AccountStore: ObservableObject {
                 refreshedAuth: refreshed.authData
             )
             accounts[index].usage = refreshed.usage
+            accounts[index].credentialStatus = .ready
             persistAccounts()
             guard QuotaFailoverPolicy.isExhausted(refreshed.usage) else { return }
             await attemptAutoFailover(exhaustedAccountID: activeAccountID)
         } catch {
+            markCredentialFailure(accountID: activeAccountID, error: error)
             statusText = "Auto-switch check failed; retrying"
         }
     }
@@ -421,6 +482,7 @@ final class AccountStore: ObservableObject {
             isAutoRecovering = false
         }
 
+        var selectedCandidateID: String?
         do {
             try persistActiveCredentialToKeychain()
         } catch {
@@ -448,9 +510,10 @@ final class AccountStore: ObservableObject {
             statusText = "Quota exhausted; no other account has usable quota"
             return
         }
+        selectedCandidateID = candidate.id
 
         do {
-            guard let savedAuth = try KeychainStore.read(
+            guard let savedAuth = try await KeychainStore.read(
                 service: KeychainStore.accountService,
                 account: candidate.id
             ) else {
@@ -522,6 +585,9 @@ final class AccountStore: ObservableObject {
         } catch is CancellationError {
             statusText = "Automatic account switch cancelled"
         } catch {
+            if let selectedCandidateID {
+                markCredentialFailure(accountID: selectedCandidateID, error: error)
+            }
             statusText = "Automatic account switch failed"
             errorMessage = error.localizedDescription
         }
@@ -584,6 +650,15 @@ final class AccountStore: ObservableObject {
         )
     }
 
+    private func markCredentialFailure(accountID: String, error: Error) {
+        guard AccountAuthenticationFailure.isCredentialFailure(error),
+              let index = accounts.firstIndex(where: { $0.id == accountID })
+        else { return }
+        accounts[index].usage = nil
+        accounts[index].credentialStatus = .signInRequired
+        persistAccounts()
+    }
+
     private func persistProviders() {
         if let data = try? JSONEncoder().encode(providers) {
             UserDefaults.standard.set(data, forKey: providerMetadataKey)
@@ -599,9 +674,11 @@ final class AccountStore: ObservableObject {
 
 enum AccountStoreError: LocalizedError {
     case missingCredentials(String)
+    case unexpectedAccount(String)
     var errorDescription: String? {
         switch self {
         case .missingCredentials(let account): "Credentials are missing for \(account)."
+        case .unexpectedAccount(let account): "Sign in to \(account), not another account."
         }
     }
 }

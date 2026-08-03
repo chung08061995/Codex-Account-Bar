@@ -12,7 +12,7 @@ final class ProviderService {
         status: @escaping @MainActor (String) -> Void
     ) async throws {
         let ocx = try findOCX()
-        let environment = try providerEnvironment(allProfiles)
+        let environment = try await providerEnvironment(allProfiles)
         let keyReference = profile.requiresAPIKey ? "${\(environmentName(profile.id))}" : nil
 
         status("Stopping previous opencodex…")
@@ -186,10 +186,10 @@ final class ProviderService {
         return home.appending(path: "config.toml")
     }
 
-    private func providerEnvironment(_ profiles: [ProviderProfile]) throws -> [String: String] {
+    private func providerEnvironment(_ profiles: [ProviderProfile]) async throws -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         for profile in profiles where profile.requiresAPIKey {
-            guard let data = try KeychainStore.read(
+            guard let data = try await KeychainStore.read(
                 service: KeychainStore.providerService,
                 account: profile.id.uuidString
             ), let value = String(data: data, encoding: .utf8), !value.isEmpty else {

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Windows;
 
 namespace CodexAccountBar.Models;
 
@@ -10,6 +11,15 @@ public sealed class AccountRecord : INotifyPropertyChanged
     public DateTimeOffset AddedAt { get; init; } = DateTimeOffset.UtcNow;
     public bool IsActive { get; set; }
     public bool HasUsage { get; set; }
+    public bool RequiresSignIn { get; set; }
+
+    public string PrimaryActionText => RequiresSignIn || !HasUsage ? "Sign In" : IsActive ? "Active" : "Switch";
+    public bool CanPrimaryAction => RequiresSignIn || !HasUsage || !IsActive;
+    public Visibility UsageVisibility => HasUsage ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility MissingUsageVisibility => HasUsage ? Visibility.Collapsed : Visibility.Visible;
+    public string MissingUsageText => RequiresSignIn
+        ? "Session expired. Sign in again to load quota."
+        : "Sign in to verify this saved session and load quota.";
 
     public string PrimaryTitle { get; set; } = "Quota";
     public double PrimaryUsed { get; set; }

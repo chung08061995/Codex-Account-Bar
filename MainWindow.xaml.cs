@@ -180,7 +180,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 catch (Exception e)
                 {
                     succeeded = false;
-                    if (!usesActiveAuth && IsCredentialFailure(e)) account.HasUsage = false;
+                    if (IsCredentialFailure(e)) MarkCredentialFailure(account);
                     account.StatusText = e.Message;
                     AppLog.Error($"Refresh usage for {account.Email}", e);
                 }
@@ -289,6 +289,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private async void Switch_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as WpfButton)?.Tag is not AccountRecord account) return;
+        if (account.RequiresSignIn || !account.HasUsage)
+        {
+            await ReauthenticateAccountAsync(account);
+            return;
+        }
         Message = $"Switching to {account.Email}…";
         try
         {
@@ -311,6 +316,47 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Message = refreshed
                 ? $"Switched to {account.Email}. Codex Desktop restarted."
                 : $"Switched to {account.Email}. Quota refresh will retry automatically.";
+        }
+        catch (Exception exception)
+        {
+            if (IsCredentialFailure(exception))
+            {
+                MarkCredentialFailure(account);
+                account.NotifyAll();
+                Message = $"{account.Email} needs sign-in before it can be switched.";
+            }
+            else
+            {
+                Message = exception.Message;
+            }
+        }
+    }
+
+    private async Task ReauthenticateAccountAsync(AccountRecord account)
+    {
+        Message = $"Sign in to {account.Email} in your browser…";
+        try
+        {
+            string auth;
+            try
+            {
+                auth = await _codex.LoginIsolatedAsync();
+            }
+            catch (FileNotFoundException)
+            {
+                throw new InvalidOperationException("Codex CLI is required to sign this account in again.");
+            }
+
+            var identity = AuthInspector.Inspect(auth);
+            if (!account.Email.Equals(identity.Email, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Sign in to {account.Email}, not {identity.Email}.");
+
+            await _vault.SaveAsync(auth);
+            var refreshed = await _usage.FetchRefreshingCredentialAsync(auth);
+            await CommitRefreshedCredentialAsync(account, auth, refreshed.AuthJson);
+            ApplyUsage(account, refreshed.Usage);
+            account.NotifyAll();
+            Message = $"Signed in to {account.Email}. You can switch to it now.";
         }
         catch (Exception exception)
         {
@@ -365,6 +411,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         catch (Exception exception)
         {
+            if (IsCredentialFailure(exception))
+            {
+                MarkCredentialFailure(active);
+                active.NotifyAll();
+            }
             AppLog.Error("Automatic quota check", exception);
             Message = "Auto-switch check failed; retrying.";
         }
@@ -378,6 +429,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         IsAutoRecovering = true;
         Message = "Quota exhausted; checking other accounts…";
+        AccountRecord? selectedCandidate = null;
         try
         {
             await PersistActiveCredentialToVaultAsync();
@@ -393,6 +445,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 Message = "Quota exhausted; no other account has usable quota.";
                 return;
             }
+            selectedCandidate = candidate;
 
             var savedAuth = await _vault.ReadAuthAsync(candidate.Id);
             var refreshed = await _usage.FetchRefreshingCredentialAsync(savedAuth);
@@ -458,6 +511,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         catch (Exception exception)
         {
+            if (selectedCandidate is not null && IsCredentialFailure(exception))
+            {
+                MarkCredentialFailure(selectedCandidate);
+                selectedCandidate.NotifyAll();
+            }
             AppLog.Error("Automatic account failover", exception);
             Message = "Automatic account switch failed: " + exception.Message;
         }
@@ -467,6 +525,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private static void ApplyUsage(AccountRecord account, UsageResult usage)
     {
         account.HasUsage = true;
+        account.RequiresSignIn = false;
         account.PrimaryTitle = usage.Primary.Title;
         account.PrimaryUsed = usage.Primary.UsedPercent;
         account.PrimaryReset = usage.Primary.ResetText;
@@ -533,6 +592,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private static bool IsCredentialFailure(Exception exception) =>
         exception is System.Net.Http.HttpRequestException
         { StatusCode: System.Net.HttpStatusCode.Unauthorized };
+
+    private static void MarkCredentialFailure(AccountRecord account)
+    {
+        account.HasUsage = false;
+        account.RequiresSignIn = true;
+        account.StatusText = "Session expired. Sign in again.";
+    }
 
     private void Hide_Click(object sender, RoutedEventArgs e) => Hide();
     private void Settings_Click(object sender, RoutedEventArgs e) =>

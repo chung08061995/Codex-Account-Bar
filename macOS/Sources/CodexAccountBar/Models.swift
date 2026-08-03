@@ -39,6 +39,11 @@ struct UsageSnapshot: Codable, Hashable {
     var automaticResetApplied: Bool? = nil
 }
 
+enum AccountCredentialStatus: String, Codable, Hashable {
+    case ready
+    case signInRequired
+}
+
 struct SavedAccount: Codable, Identifiable, Hashable {
     let id: String
     var email: String
@@ -46,6 +51,9 @@ struct SavedAccount: Codable, Identifiable, Hashable {
     var label: String?
     var usage: UsageSnapshot?
     var lastWarmupAt: Double?
+    var credentialStatus: AccountCredentialStatus? = nil
+
+    var needsSignIn: Bool { credentialStatus == .signInRequired }
 
     var displayName: String {
         let trimmed = (label ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
