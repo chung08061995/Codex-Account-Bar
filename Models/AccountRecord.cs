@@ -13,12 +13,12 @@ public sealed class AccountRecord : INotifyPropertyChanged
     public bool HasUsage { get; set; }
     public bool RequiresSignIn { get; set; }
 
-    public string PrimaryActionText => RequiresSignIn ? "Unavailable" : IsActive ? "Active" : "Switch";
-    public bool CanPrimaryAction => !RequiresSignIn && !IsActive;
+    public string PrimaryActionText => RequiresSignIn ? "Sign In" : IsActive ? "Active" : "Switch";
+    public bool CanPrimaryAction => RequiresSignIn || !IsActive;
     public Visibility UsageVisibility => HasUsage ? Visibility.Visible : Visibility.Collapsed;
     public Visibility MissingUsageVisibility => HasUsage ? Visibility.Collapsed : Visibility.Visible;
     public string MissingUsageText => RequiresSignIn
-        ? "Saved session was rejected (401). Bar will not switch or sign in automatically."
+        ? "Saved session was rejected (401). Sign in manually to reconnect this account."
         : "Quota unavailable. Refresh to try again.";
 
     public string PrimaryTitle { get; set; } = "Quota";

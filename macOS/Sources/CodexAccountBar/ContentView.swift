@@ -133,7 +133,11 @@ struct ContentView: View {
                                 .help("Remove this saved account from Codex Account Bar")
                             } else {
                                 Button(presentation.actionTitle) {
-                                    store.activateAccount(account)
+                                    if presentation.credentialRejected {
+                                        store.reauthenticateAccount(account)
+                                    } else {
+                                        store.activateAccount(account)
+                                    }
                                 }
                                 .disabled(presentation.actionDisabled)
                                 Button {
@@ -270,9 +274,9 @@ struct AccountRowPresentation {
     init(account: SavedAccount, isActive: Bool, isBusy: Bool) {
         credentialRejected = account.needsSignIn
         if credentialRejected {
-            actionTitle = "Unavailable"
-            actionDisabled = true
-            notice = "Saved session was rejected (401). Bar will not switch or sign in automatically."
+            actionTitle = "Sign In"
+            actionDisabled = isBusy
+            notice = "Saved session was rejected (401). Sign in manually to reconnect this account."
         } else {
             actionTitle = isActive ? "Active" : "Switch"
             actionDisabled = isBusy || isActive

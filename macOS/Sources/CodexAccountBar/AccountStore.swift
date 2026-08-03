@@ -147,6 +147,10 @@ final class AccountStore: ObservableObject {
         startAccountLogin(expectedAccount: nil)
     }
 
+    func reauthenticateAccount(_ account: SavedAccount) {
+        startAccountLogin(expectedAccount: account)
+    }
+
     private func startAccountLogin(expectedAccount: SavedAccount?) {
         guard !isBusy else { return }
         isBusy = true
@@ -170,6 +174,11 @@ final class AccountStore: ObservableObject {
                     service: KeychainStore.accountService,
                     account: result.account.id
                 )
+                if expectedAccount != nil, activeAccountID == result.account.id {
+                    // Repair the active auth cache too, but leave restarting or
+                    // switching Codex to a separate explicit action.
+                    try codexService.activateAccount(authData: result.authData)
+                }
                 if let index = accounts.firstIndex(where: { $0.id == result.account.id }) {
                     var updated = result.account
                     updated.label = accounts[index].label

@@ -291,7 +291,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if ((sender as WpfButton)?.Tag is not AccountRecord account) return;
         if (account.RequiresSignIn)
         {
-            Message = $"{account.Email} was rejected with 401. Codex Account Bar will not switch or sign in automatically.";
+            await ReauthenticateAccountAsync(account);
             return;
         }
         Message = $"Switching to {account.Email}…";
@@ -329,6 +329,50 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 Message = exception.Message;
             }
+        }
+    }
+
+    private async Task ReauthenticateAccountAsync(AccountRecord account)
+    {
+        Message = $"Sign in to {account.Email} in your browser…";
+        try
+        {
+            string auth;
+            try
+            {
+                auth = await _codex.LoginIsolatedAsync();
+            }
+            catch (FileNotFoundException)
+            {
+                throw new InvalidOperationException("Codex CLI is required to sign this account in again.");
+            }
+
+            var identity = AuthInspector.Inspect(auth);
+            if (!account.Email.Equals(identity.Email, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Sign in to {account.Email}, not {identity.Email}.");
+
+            await _vault.SaveAsync(auth);
+            if (account.IsActive)
+                await _codex.WriteAuthAsync(auth);
+
+            account.RequiresSignIn = false;
+            account.HasUsage = false;
+            account.NotifyAll();
+
+            var refreshed = await _usage.FetchRefreshingCredentialAsync(auth);
+            await CommitRefreshedCredentialAsync(account, auth, refreshed.AuthJson);
+            ApplyUsage(account, refreshed.Usage);
+            account.NotifyAll();
+            Message = $"Signed in to {account.Email}. You can switch to it now.";
+        }
+        catch (Exception exception)
+        {
+            if (IsCredentialFailure(exception))
+            {
+                MarkCredentialFailure(account);
+                account.NotifyAll();
+            }
+            Message = exception.Message;
         }
     }
 
