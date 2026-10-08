@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Threading;
+using Microsoft.Win32;
 using CodexAccountBar.Models;
 using CodexAccountBar.Services;
 
@@ -177,6 +178,38 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _isAdding = false;
             NotifySignInState();
         }
+    }
+
+    private async void ImportJson_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog { Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*", Title = "Import Codex account JSON" };
+        if (dialog.ShowDialog(this) != true) return;
+        Message = "Importing account JSON…";
+        try
+        {
+            var source = await File.ReadAllTextAsync(dialog.FileName);
+            var normalized = AuthInspector.Normalize(source);
+            try
+            {
+                normalized = await _codex.RefreshAuthAsync(normalized);
+                Message = "Imported account and refreshed its access token.";
+            }
+            catch (Exception exception)
+            {
+                AppLog.Error("Import token refresh", exception);
+                Message = "Imported account, but its refresh token was rejected. Sign in again to load quota.";
+            }
+            var saved = await _vault.SaveAsync(normalized);
+            var account = Accounts.FirstOrDefault(item => item.Id == saved.Id);
+            if (account is null)
+            {
+                account = saved;
+                Accounts.Add(account);
+            }
+            Changed(nameof(EmptyVisibility));
+            await RefreshAccountAsync(account);
+        }
+        catch (Exception exception) { Message = exception.Message; }
     }
 
     private void CancelSignIn_Click(object sender, RoutedEventArgs e)

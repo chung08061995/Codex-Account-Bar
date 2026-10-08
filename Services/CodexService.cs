@@ -26,6 +26,31 @@ public sealed class CodexService
 
     public async Task<string?> ReadActiveAuthAsync() => File.Exists(AuthPath) ? await File.ReadAllTextAsync(AuthPath) : null;
 
+    public async Task<string> RefreshAuthAsync(string json, CancellationToken cancellationToken = default)
+    {
+        var normalized = AuthInspector.Normalize(json);
+        var identity = AuthInspector.Inspect(normalized);
+        using var document = JsonDocument.Parse(normalized);
+        var refreshToken = document.RootElement.GetProperty("tokens").GetProperty("refresh_token").GetString();
+        if (string.IsNullOrWhiteSpace(refreshToken)) throw new InvalidDataException("Refresh token is missing.");
+        using var form = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = "refresh_token",
+            ["refresh_token"] = refreshToken,
+            ["client_id"] = ClientId
+        });
+        using var response = await UsageHttpClient.Create().PostAsync("https://auth.openai.com/oauth/token", form, cancellationToken);
+        if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"Refresh token was rejected (HTTP {(int)response.StatusCode}).");
+        using var tokenDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        var tokens = tokenDocument.RootElement;
+        var idToken = tokens.GetProperty("id_token").GetString();
+        var accessToken = tokens.GetProperty("access_token").GetString();
+        var newRefresh = tokens.TryGetProperty("refresh_token", out var replacement) ? replacement.GetString() : refreshToken;
+        var draft = AuthJson(idToken, accessToken, newRefresh, identity.AccountId);
+        var accountId = AuthInspector.Inspect(draft).AccountId;
+        return AuthJson(idToken, accessToken, newRefresh, accountId);
+    }
+
     public async Task<string> LoginIsolatedAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
