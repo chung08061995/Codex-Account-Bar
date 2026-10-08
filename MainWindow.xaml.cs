@@ -211,6 +211,23 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         catch (Exception exception) { Message = exception.Message; }
     }
 
+    private async void Switch_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as System.Windows.Controls.Button)?.Tag is not AccountRecord account || !account.CanSwitch) return;
+        try
+        {
+            Message = $"Switching to {account.Email} and reloading VS Code…";
+            await _codex.SwitchAccountAsync(await _vault.ReadAuthAsync(account.Id));
+            foreach (var item in Accounts)
+            {
+                item.IsActive = item.Id == account.Id;
+                item.NotifyAll();
+            }
+            Message = $"Using {account.Email}. VS Code reload requested.";
+        }
+        catch (Exception exception) { Message = exception.Message; }
+    }
+
     private void CancelSignIn_Click(object sender, RoutedEventArgs e)
     {
         if (!CanCancelSignIn) return;
@@ -300,6 +317,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             account.StatusText = usage.SessionUsed.HasValue || usage.WeeklyUsed.HasValue
                 ? $"Updated {DateTimeOffset.Now:HH:mm:ss}"
                 : "Quota unavailable: no usage windows returned.";
+            account.QuotaFailureCount = 0;
 
         }
         catch (Exception exception)
@@ -309,6 +327,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             account.SessionResetAt = null;
             account.WeeklyResetAt = null;
             account.StatusText = exception.Message;
+            account.QuotaFailureCount++;
         }
         try
         {
@@ -327,6 +346,24 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             account.ResetDetail = exception.Message;
         }
         account.NotifyAll();
+        await AutoFailoverAsync(account);
+    }
+
+    private async Task AutoFailoverAsync(AccountRecord account)
+    {
+        if (!account.IsActive || Accounts.Count < 2) return;
+        var quotaExhausted = account.SessionUsed >= 100 || account.WeeklyUsed >= 100;
+        var requestFailed = account.QuotaFailureCount >= 2 && account.StatusText.Contains("Quota unavailable", StringComparison.OrdinalIgnoreCase);
+        if (!quotaExhausted && !requestFailed) return;
+        var candidate = Accounts.Where(item => item.Id != account.Id && item.QuotaFailureCount == 0 && item.SessionUsed is < 100 && item.WeeklyUsed is < 100).OrderBy(item => Math.Max(item.SessionUsed ?? 0, item.WeeklyUsed ?? 0)).FirstOrDefault();
+        if (candidate is null) return;
+        await _codex.SwitchAccountAsync(await _vault.ReadAuthAsync(candidate.Id));
+        foreach (var item in Accounts)
+        {
+            item.IsActive = item.Id == candidate.Id;
+            item.NotifyAll();
+        }
+        Message = $"{account.Email} is unavailable. Switched to {candidate.Email} and requested a VS Code reload.";
     }
 
     #endregion

@@ -26,6 +26,31 @@ public sealed class CodexService
 
     public async Task<string?> ReadActiveAuthAsync() => File.Exists(AuthPath) ? await File.ReadAllTextAsync(AuthPath) : null;
 
+    public async Task SwitchAccountAsync(string json, CancellationToken cancellationToken = default)
+    {
+        var normalized = AuthInspector.Normalize(json);
+        Directory.CreateDirectory(CodexHome);
+        var temporary = AuthPath + ".cab.tmp";
+        await File.WriteAllTextAsync(temporary, normalized, cancellationToken);
+        File.Move(temporary, AuthPath, true);
+        await ReloadVsCodeAsync(cancellationToken);
+    }
+
+    public async Task ReloadVsCodeAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo("vscode://command/workbench.action.reloadWindow") { UseShellExecute = true });
+            if (process is not null) await process.WaitForExitAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            AppLog.Error("VS Code reload", exception);
+            throw new InvalidOperationException("Account was switched, but VS Code could not be reloaded. Run Developer: Reload Window in VS Code.", exception);
+        }
+    }
+
     public async Task<string> RefreshAuthAsync(string json, CancellationToken cancellationToken = default)
     {
         var normalized = AuthInspector.Normalize(json);
