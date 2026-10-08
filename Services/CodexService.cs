@@ -4,6 +4,8 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
 
 namespace CodexAccountBar.Services;
 
@@ -39,16 +41,15 @@ public sealed class CodexService
     public async Task ReloadVsCodeAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        try
-        {
-            using var process = Process.Start(new ProcessStartInfo("vscode://command/workbench.action.reloadWindow") { UseShellExecute = true });
-            if (process is not null) await process.WaitForExitAsync(cancellationToken);
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
-        {
-            AppLog.Error("VS Code reload", exception);
-            throw new InvalidOperationException("Account was switched, but VS Code could not be reloaded. Run Developer: Reload Window in VS Code.", exception);
-        }
+        var window = Process.GetProcessesByName("Code").FirstOrDefault(process => process.MainWindowHandle != IntPtr.Zero);
+        if (window is null) throw new InvalidOperationException("Account was switched, but no VS Code window was found.");
+        if (!SetForegroundWindow(window.MainWindowHandle)) throw new InvalidOperationException("Account was switched, but VS Code could not be focused for reload.");
+        await Task.Delay(150, cancellationToken);
+        SendKeys.SendWait("^+p");
+        await Task.Delay(150, cancellationToken);
+        SendKeys.SendWait("Developer: Reload Window");
+        await Task.Delay(150, cancellationToken);
+        SendKeys.SendWait("{ENTER}");
     }
 
     public async Task<string> RefreshAuthAsync(string json, CancellationToken cancellationToken = default)
@@ -152,6 +153,9 @@ public sealed class CodexService
     #endregion
 
     #region Private Methods
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr windowHandle);
 
     private static HttpListener CreateListener(out int port)
     {
