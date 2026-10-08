@@ -3,7 +3,6 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Threading;
-using Microsoft.Win32;
 using CodexAccountBar.Models;
 using CodexAccountBar.Services;
 
@@ -182,12 +181,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async void ImportJson_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new Microsoft.Win32.OpenFileDialog { Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*", Title = "Import Codex account JSON" };
-        if (dialog.ShowDialog(this) != true) return;
+        var dialog = new JsonImportWindow { Owner = this };
+        if (dialog.ShowDialog() != true) return;
         Message = "Importing account JSON…";
         try
         {
-            var source = await File.ReadAllTextAsync(dialog.FileName);
+            var source = dialog.JsonText;
             var normalized = AuthInspector.Normalize(source);
             try
             {
