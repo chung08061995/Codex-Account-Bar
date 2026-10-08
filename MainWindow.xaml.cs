@@ -15,7 +15,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly AccountVault _vault = new();
     private readonly CodexService _codex = new();
     private readonly UsageService _usage = new();
-    private readonly QuotaResetStore _resetStore = new();
+    private readonly BankedResetService _resets = new();
     private readonly SemaphoreSlim _quotaGate = new(1, 1);
     private readonly DispatcherTimer _refreshTimer = new() { Interval = TimeSpan.FromMinutes(1) };
     private bool _forceClose;
@@ -89,7 +89,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             foreach (var account in await _vault.LoadAsync())
             {
-                ApplyResetState(account, await _resetStore.ReadAsync(account.Id));
                 Accounts.Add(account);
             }
             var active = await _codex.ReadActiveAuthAsync();
@@ -188,12 +187,34 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         NotifySignInState();
     }
 
-    private async void CheckResets_Click(object sender, RoutedEventArgs e)
+    private async void ResetQuota_Click(object sender, RoutedEventArgs e)
     {
-        if ((sender as System.Windows.Controls.Button)?.Tag is not AccountRecord account || _refreshBusy) return;
-        _refreshBusy = true;
-        try { await RefreshAccountAsync(account); }
-        finally { _refreshBusy = false; }
+        if ((sender as System.Windows.Controls.Button)?.Tag is not AccountRecord account || !account.CanResetQuota) return;
+        var count = account.AvailableResetCount ?? 0;
+        var confirmation = System.Windows.MessageBox.Show(
+            $"Use 1 of {count} available reset{(count == 1 ? "" : "s")} for {account.Email}?\n\nThis immediately restores both the 5-hour and weekly quota and cannot be undone.",
+            "Reset Codex quota",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+        if (confirmation != MessageBoxResult.Yes) return;
+        account.ResetBusy = true;
+        account.NotifyAll();
+        await _quotaGate.WaitAsync();
+        try
+        {
+            if (!Accounts.Contains(account)) return;
+            var auth = await _vault.ReadAuthAsync(account.Id);
+            await _resets.ConsumeAsync(auth, account.ResetCreditId!);
+            Message = "OpenAI confirmed the reset. Reloading quota…";
+        }
+        catch (Exception exception) { Message = exception.Message; }
+        finally
+        {
+            if (Accounts.Contains(account)) await FetchAccountQuotaAsync(account);
+            account.ResetBusy = false;
+            account.NotifyAll();
+            _quotaGate.Release();
+        }
     }
 
     private async void Remove_Click(object sender, RoutedEventArgs e)
@@ -205,7 +226,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             await _vault.RemoveAsync(account.Id);
             Accounts.Remove(account);
             Changed(nameof(EmptyVisibility));
-            await _resetStore.RemoveAsync(account.Id);
         }
         catch (Exception exception) { Message = exception.Message; }
     }
@@ -220,7 +240,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     private void Hide_Click(object sender, RoutedEventArgs e) => Hide();
-    private void Settings_Click(object sender, RoutedEventArgs e) => Message = $"Codex auth: {_codex.AuthPath}\nQuota refreshes every minute. Reset counts track observed OpenAI resets since tracking started; earlier history is unavailable.";
+    private void Settings_Click(object sender, RoutedEventArgs e) => Message = $"Codex auth: {_codex.AuthPath}\nQuota refreshes every minute. Reset quota consumes one available OpenAI reset and refreshes both usage windows.";
 
     #endregion
 
@@ -248,15 +268,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             account.StatusText = usage.SessionUsed.HasValue || usage.WeeklyUsed.HasValue
                 ? $"Updated {DateTimeOffset.Now:HH:mm:ss}"
                 : "Quota unavailable: no usage windows returned.";
-            if (usage.SessionUsed.HasValue || usage.WeeklyUsed.HasValue)
-            {
-                try { ApplyResetState(account, await _resetStore.ObserveAsync(account.Id, usage, DateTimeOffset.UtcNow)); }
-                catch (Exception exception)
-                {
-                    AppLog.Error("Save quota reset counts", exception);
-                    account.StatusText += " · Could not save reset counts.";
-                }
-            }
+
         }
         catch (Exception exception)
         {
@@ -266,20 +278,28 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             account.WeeklyResetAt = null;
             account.StatusText = exception.Message;
         }
+        try
+        {
+            var balance = await _resets.FetchAsync(await _vault.ReadAuthAsync(account.Id));
+            if (!Accounts.Contains(account)) return;
+            account.AvailableResetCount = balance.AvailableCount;
+            var credit = balance.Credits.FirstOrDefault();
+            account.ResetCreditId = credit?.Id;
+            account.ResetDetail = credit?.ExpiresAt is { } expires ? $"Next reset expires {expires.ToLocalTime():dd MMM yyyy HH:mm}"
+                : balance.AvailableCount == 0 ? "No banked resets available" : credit is null ? "No compatible reset available for this plan" : "Resets both 5-hour and weekly quota";
+        }
+        catch (Exception exception)
+        {
+            account.AvailableResetCount = null;
+            account.ResetCreditId = null;
+            account.ResetDetail = exception.Message;
+        }
         account.NotifyAll();
     }
 
     #endregion
 
     #region Private Methods
-
-    private static void ApplyResetState(AccountRecord account, QuotaResetState? state)
-    {
-        if (state is null) return;
-        account.SessionResetCount = state.SessionCount;
-        account.WeeklyResetCount = state.WeeklyCount;
-        account.TrackingStartedAt = state.TrackingStartedAt;
-    }
 
     private void NotifySignInState()
     {
