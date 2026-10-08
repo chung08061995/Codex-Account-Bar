@@ -41,6 +41,7 @@ public sealed class CodexService
     public async Task ReloadVsCodeAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        await RestartVsCodeCodexServerAsync(cancellationToken);
         var window = Process.GetProcessesByName("Code").FirstOrDefault(process => process.MainWindowHandle != IntPtr.Zero);
         if (window is null) throw new InvalidOperationException("Account was switched, but no VS Code window was found.");
         if (!SetForegroundWindow(window.MainWindowHandle)) throw new InvalidOperationException("Account was switched, but VS Code could not be focused for reload.");
@@ -153,6 +154,31 @@ public sealed class CodexService
     #endregion
 
     #region Private Methods
+
+    private static async Task RestartVsCodeCodexServerAsync(CancellationToken cancellationToken)
+    {
+        var servers = Process.GetProcessesByName("codex")
+            .Where(process =>
+            {
+                try { return process.MainModule?.FileName.Contains("openai.chatgpt", StringComparison.OrdinalIgnoreCase) == true; }
+                catch { return false; }
+            })
+            .ToArray();
+        foreach (var server in servers)
+        {
+            try
+            {
+                server.Kill(true);
+                await server.WaitForExitAsync(cancellationToken);
+                AppLog.Info("Restarted VS Code Codex app-server after account switch.");
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                AppLog.Error("Restart VS Code Codex app-server", exception);
+            }
+            finally { server.Dispose(); }
+        }
+    }
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr windowHandle);
