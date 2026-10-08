@@ -24,6 +24,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _isAdding;
     private CancellationTokenSource? _loginCancellation;
     private string _message = "";
+    private RequestLogWindow? _requestLogWindow;
 
     #endregion
 
@@ -289,6 +290,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     private void Hide_Click(object sender, RoutedEventArgs e) => Hide();
+    private void Log_Click(object sender, RoutedEventArgs e)
+    {
+        if (_requestLogWindow is null)
+        {
+            _requestLogWindow = new RequestLogWindow { Owner = this };
+            _requestLogWindow.Closed += (_, _) => _requestLogWindow = null;
+            _requestLogWindow.Show();
+        }
+        if (_requestLogWindow.WindowState == WindowState.Minimized) _requestLogWindow.WindowState = WindowState.Normal;
+        _requestLogWindow.Activate();
+    }
+
     private void Settings_Click(object sender, RoutedEventArgs e) => Message = $"Codex auth: {_codex.AuthPath}\nQuota refreshes every minute. Reset quota consumes one available OpenAI reset and refreshes both usage windows.";
 
     #endregion
