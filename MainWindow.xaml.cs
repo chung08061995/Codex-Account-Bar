@@ -15,10 +15,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly AccountVault _vault = new();
     private readonly CodexService _codex = new();
     private readonly UsageService _usage = new();
+    private readonly QuotaResetStore _resetStore = new();
+    private readonly SemaphoreSlim _quotaGate = new(1, 1);
     private readonly DispatcherTimer _refreshTimer = new() { Interval = TimeSpan.FromMinutes(1) };
     private bool _forceClose;
     private bool _loaded;
     private bool _refreshBusy;
+    private bool _isAdding;
+    private CancellationTokenSource? _loginCancellation;
     private string _message = "";
 
     #endregion
@@ -37,6 +41,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
     public Visibility MessageVisibility => string.IsNullOrWhiteSpace(Message) ? Visibility.Collapsed : Visibility.Visible;
     public Visibility EmptyVisibility => Accounts.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    public bool CanAddAccount => !_isAdding;
+    public bool CanCancelSignIn => _loginCancellation is { IsCancellationRequested: false };
+    public Visibility AddVisibility => _loginCancellation is null ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility CancelVisibility => _loginCancellation is null ? Visibility.Collapsed : Visibility.Visible;
 
     #endregion
 
@@ -63,7 +71,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             e.Cancel = true;
             Hide();
         }
-        else _refreshTimer.Stop();
+        else
+        {
+            _refreshTimer.Stop();
+            _loginCancellation?.Cancel();
+        }
         base.OnClosing(e);
     }
 
@@ -75,7 +87,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         try
         {
-            foreach (var account in await _vault.LoadAsync()) Accounts.Add(account);
+            foreach (var account in await _vault.LoadAsync())
+            {
+                ApplyResetState(account, await _resetStore.ReadAsync(account.Id));
+                Accounts.Add(account);
+            }
             var active = await _codex.ReadActiveAuthAsync();
             if (active is not null)
             {
@@ -131,15 +147,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async void Add_Click(object sender, RoutedEventArgs e)
     {
+        if (_isAdding) return;
+        _isAdding = true;
+        using var cancellation = new CancellationTokenSource();
+        _loginCancellation = cancellation;
+        NotifySignInState();
         Message = "Complete Codex sign-in in your browser…";
         try
         {
-            string auth;
-            try { auth = await _codex.LoginIsolatedAsync(); }
-            catch (FileNotFoundException)
-            {
-                auth = await _codex.ReadActiveAuthAsync() ?? throw new InvalidOperationException("Codex CLI is not installed and no active Codex account was found.");
-            }
+            var auth = await _codex.LoginIsolatedAsync(cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            _loginCancellation = null;
+            NotifySignInState();
             var saved = await _vault.SaveAsync(auth);
             var account = Accounts.FirstOrDefault(item => item.Id == saved.Id);
             if (account is null)
@@ -151,25 +170,30 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             await RefreshAccountAsync(account);
             Message = $"Saved {account.Email} securely.";
         }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { Message = "Sign-in cancelled. No account was added."; }
         catch (Exception exception) { Message = exception.Message; }
+        finally
+        {
+            _loginCancellation = null;
+            _isAdding = false;
+            NotifySignInState();
+        }
     }
 
-    private async void Switch_Click(object sender, RoutedEventArgs e)
+    private void CancelSignIn_Click(object sender, RoutedEventArgs e)
     {
-        if ((sender as System.Windows.Controls.Button)?.Tag is not AccountRecord account) return;
-        Message = $"Switching to {account.Email}…";
-        try
-        {
-            await _codex.WriteAndRestartAsync(await _vault.ReadAuthAsync(account.Id));
-            foreach (var item in Accounts)
-            {
-                item.IsActive = item.Id == account.Id;
-                item.NotifyAll();
-            }
-            await RefreshAccountAsync(account);
-            Message = $"Switched to {account.Email}. Codex Desktop restarted.";
-        }
-        catch (Exception exception) { Message = exception.Message; }
+        if (!CanCancelSignIn) return;
+        Message = "Cancelling sign-in…";
+        _loginCancellation?.Cancel();
+        NotifySignInState();
+    }
+
+    private async void CheckResets_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as System.Windows.Controls.Button)?.Tag is not AccountRecord account || _refreshBusy) return;
+        _refreshBusy = true;
+        try { await RefreshAccountAsync(account); }
+        finally { _refreshBusy = false; }
     }
 
     private async void Remove_Click(object sender, RoutedEventArgs e)
@@ -181,6 +205,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             await _vault.RemoveAsync(account.Id);
             Accounts.Remove(account);
             Changed(nameof(EmptyVisibility));
+            await _resetStore.RemoveAsync(account.Id);
         }
         catch (Exception exception) { Message = exception.Message; }
     }
@@ -195,7 +220,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     private void Hide_Click(object sender, RoutedEventArgs e) => Hide();
-    private void Settings_Click(object sender, RoutedEventArgs e) => Message = $"Codex auth: {_codex.AuthPath}\nQuota refreshes automatically every minute. Bars show quota remaining.";
+    private void Settings_Click(object sender, RoutedEventArgs e) => Message = $"Codex auth: {_codex.AuthPath}\nQuota refreshes every minute. Reset counts track observed OpenAI resets since tracking started; earlier history is unavailable.";
 
     #endregion
 
@@ -203,9 +228,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async Task RefreshAccountAsync(AccountRecord account)
     {
+        await _quotaGate.WaitAsync();
+        try { await FetchAccountQuotaAsync(account); }
+        finally { _quotaGate.Release(); }
+    }
+
+    private async Task FetchAccountQuotaAsync(AccountRecord account)
+    {
         try
         {
             var usage = await _usage.FetchAsync(await _vault.ReadAuthAsync(account.Id));
+            if (!Accounts.Contains(account)) return;
             account.SessionUsed = usage.SessionUsed;
             account.WeeklyUsed = usage.WeeklyUsed;
             account.SessionResetAt = usage.SessionResetAt;
@@ -215,6 +248,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             account.StatusText = usage.SessionUsed.HasValue || usage.WeeklyUsed.HasValue
                 ? $"Updated {DateTimeOffset.Now:HH:mm:ss}"
                 : "Quota unavailable: no usage windows returned.";
+            if (usage.SessionUsed.HasValue || usage.WeeklyUsed.HasValue)
+            {
+                try { ApplyResetState(account, await _resetStore.ObserveAsync(account.Id, usage, DateTimeOffset.UtcNow)); }
+                catch (Exception exception)
+                {
+                    AppLog.Error("Save quota reset counts", exception);
+                    account.StatusText += " · Could not save reset counts.";
+                }
+            }
         }
         catch (Exception exception)
         {
@@ -230,6 +272,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     #endregion
 
     #region Private Methods
+
+    private static void ApplyResetState(AccountRecord account, QuotaResetState? state)
+    {
+        if (state is null) return;
+        account.SessionResetCount = state.SessionCount;
+        account.WeeklyResetCount = state.WeeklyCount;
+        account.TrackingStartedAt = state.TrackingStartedAt;
+    }
+
+    private void NotifySignInState()
+    {
+        Changed(nameof(CanAddAccount));
+        Changed(nameof(CanCancelSignIn));
+        Changed(nameof(AddVisibility));
+        Changed(nameof(CancelVisibility));
+    }
 
     private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
     {

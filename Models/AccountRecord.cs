@@ -17,6 +17,11 @@ public sealed class AccountRecord : INotifyPropertyChanged
     public string SessionTitle { get; set; } = "Session";
     public string WeeklyTitle { get; set; } = "Weekly";
     public string StatusText { get; set; } = "Refresh to load quota";
+    public int SessionResetCount { get; set; }
+    public int WeeklyResetCount { get; set; }
+    public DateTimeOffset? TrackingStartedAt { get; set; }
+    public string ResetCountText => $"Resets observed: 5h {SessionResetCount} · Weekly {WeeklyResetCount}";
+    public string ResetTrackingText => TrackingStartedAt is { } started ? $"Tracking since {started.ToLocalTime():dd MMM yyyy HH:mm}" : "Tracking starts when quota loads";
     public double? SessionLeft => SessionUsed is { } used ? Math.Clamp(100 - used, 0, 100) : null;
     public double? WeeklyLeft => WeeklyUsed is { } used ? Math.Clamp(100 - used, 0, 100) : null;
     public double SessionProgress => SessionLeft ?? 0;
