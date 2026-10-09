@@ -115,8 +115,21 @@ public partial class RequestLogWindow : Window
         if (LogGrid is null || SummaryText is null) return;
         var account = AccountFilter.SelectedItem as string;
         var rows = account is null || account == AllAccounts ? _records : _records.Where(record => record.Account == account).ToList();
-        LogGrid.ItemsSource = rows;
+        var priced = rows.Select(record => record with { EstimatedCost = RequestCostEstimator.Estimate(record) }).ToList();
+        LogGrid.ItemsSource = priced;
         SummaryText.Text = $"{rows.Count} requests / {rows.Select(record => record.SessionId).Distinct().Count()} sessions";
+        var covered = priced.Count(record => record.EstimatedCost.HasValue);
+        var input = TokenSum(rows.Select(record => record.InputTokens));
+        var output = TokenSum(rows.Select(record => record.OutputTokens));
+        var cached = TokenSum(rows.Select(record => record.CachedTokens));
+        var cost = covered == 0 ? "Unavailable" : "$" + priced.Sum(record => record.EstimatedCost ?? 0).ToString("N6", System.Globalization.CultureInfo.InvariantCulture);
+        CostSummaryText.Text = $"Input {input} / Output {output} / Cached {cached} tokens | Standard API estimate {cost} ({covered}/{rows.Count} requests priced)";
+    }
+
+    private static string TokenSum(IEnumerable<long?> values)
+    {
+        var known = values.Where(value => value.HasValue).Select(value => value!.Value).ToList();
+        return known.Count == 0 ? "Not recorded" : known.Sum().ToString("N0");
     }
 
     private void UpdateTrackingButton() => TrackingButton.Content = RequestTrackingConfiguration.Enabled ? "Disable tracking" : "Enable tracking";

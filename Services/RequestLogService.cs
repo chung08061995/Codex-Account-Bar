@@ -41,7 +41,7 @@ public sealed class RequestLogService
             sessions.TryGetValue(capture.ThreadId, out var session);
             var title = string.IsNullOrWhiteSpace(session?[1]) ? "Session name unavailable" : session[1]!;
             var account = accounts.TryGetValue(capture.AccountId, out var email) ? email : capture.AccountId.Length == 0 ? UnknownAccount : "Account not saved";
-            records.Add(new(capture.Timestamp, account, title, capture.ThreadId, capture.Model, capture.Status, capture.Tokens));
+            records.Add(new(capture.Timestamp, account, title, capture.ThreadId, capture.Model, capture.Status, capture.Tokens, capture.InputTokens, capture.OutputTokens, capture.CachedTokens));
         }
         var rows = logs.Query($"SELECT ts, ts_nanos, substr(feedback_log_body, 1, CASE WHEN instr(feedback_log_body, ' headers=') > 0 THEN instr(feedback_log_body, ' headers=') - 1 ELSE 4096 END), thread_id, CASE WHEN instr(feedback_log_body, '\"x-oai-request-id\":') > 0 THEN substr(feedback_log_body, instr(feedback_log_body, '\"x-oai-request-id\":'), 120) ELSE '' END FROM logs WHERE ts >= CAST(? AS INTEGER) AND target = 'codex_http_client::client' AND feedback_log_body LIKE '%Request completed method=POST url=%/responses status=%' ORDER BY ts DESC, ts_nanos DESC, id DESC LIMIT {MaximumRows}", since);
         foreach (var row in rows)

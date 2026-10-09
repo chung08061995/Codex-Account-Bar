@@ -227,9 +227,9 @@ public sealed class RequestRecorder
 
         #region Public Methods
 
-        public async Task SaveAsync(string status, long? tokens = null)
+        public async Task SaveAsync(string status, long? tokens = null, long? input = null, long? output = null, long? cached = null)
         {
-            try { await RequestCaptureStore.AppendAsync(new(_timestamp, accountId, threadId, _model, status, RequestId.Length == 0 ? _key : RequestId, tokens)); }
+            try { await RequestCaptureStore.AppendAsync(new(_timestamp, accountId, threadId, _model, status, RequestId.Length == 0 ? _key : RequestId, tokens, input, output, cached)); }
             catch (Exception exception) { AppLog.Error("Persist request metadata", new IOException(exception.GetType().Name)); }
         }
 
@@ -247,11 +247,20 @@ public sealed class RequestRecorder
                     _key = response.TryGetProperty("id", out var id) ? id.GetString() ?? Guid.NewGuid().ToString("N") : Guid.NewGuid().ToString("N");
                 }
                 if (response.TryGetProperty("model", out var model)) _model = model.GetString() ?? "Unavailable";
-                long? tokens = response.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object && usage.TryGetProperty("total_tokens", out var total) && total.TryGetInt64(out var count) ? count : null;
-                await SaveAsync(type.GetString() == "response.completed" ? "Completed" : type.GetString() == "response.failed" ? "Failed" : "Streaming", tokens);
+                var usage = response.TryGetProperty("usage", out var reported) && reported.ValueKind == JsonValueKind.Object ? reported : default;
+                var cached = Count(usage, "cached_input_tokens");
+                if (usage.ValueKind == JsonValueKind.Object && usage.TryGetProperty("input_tokens_details", out var details)) cached ??= Count(details, "cached_tokens");
+                await SaveAsync(type.GetString() == "response.completed" ? "Completed" : type.GetString() == "response.failed" ? "Failed" : "Streaming", Count(usage, "total_tokens"), Count(usage, "input_tokens"), Count(usage, "output_tokens"), cached);
             }
             catch (JsonException) { }
         }
+
+        #endregion
+
+        #region Private Methods
+
+        private static long? Count(JsonElement usage, string name)
+            => usage.ValueKind == JsonValueKind.Object && usage.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var count) && count >= 0 ? count : null;
 
         #endregion
     }

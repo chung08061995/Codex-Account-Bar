@@ -6,7 +6,7 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>CodexAccountBar</AssemblyName><RootNamespace>CodexAccountBar</RootNamespace>
-    <ApplicationManifest>app.manifest</ApplicationManifest><ApplicationIcon>Assets\app-icon.ico</ApplicationIcon><Version>1.0.14</Version>
+    <ApplicationManifest>app.manifest</ApplicationManifest><ApplicationIcon>Assets\app-icon.ico</ApplicationIcon><Version>1.0.15</Version>
   </PropertyGroup>
   <ItemGroup><Resource Include="Assets\app-icon.png"/></ItemGroup>
 </Project>
