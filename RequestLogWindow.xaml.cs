@@ -79,7 +79,7 @@ public partial class RequestLogWindow : Window
             AccountFilter.SelectedItem = choices.Contains(selected) ? selected : AllAccounts;
             ApplyFilter();
             var attributed = _records.Count(record => record.Account != RequestLogService.UnknownAccount && record.Account != "Request omitted account header");
-            StatusText.Text = _records.Count == 0 ? "No model response usage or HTTP request records were found in the last 7 days." : $"Updated {DateTimeOffset.Now:HH:mm:ss}. {_records.Count(record => record.InputTokens.HasValue && record.OutputTokens.HasValue)}/{_records.Count} rows have actual token usage; {attributed}/{_records.Count} rows have captured request account identity. Hover a row for its source and response ID.";
+            StatusText.Text = _records.Count == 0 ? "No model response usage or HTTP request records were found in the last 7 days." : $"Updated {DateTimeOffset.Now:HH:mm:ss}. {attributed}/{_records.Count} rows have captured request account identity. Hover a row for its source and response ID.";
         }
         catch (OperationCanceledException) when (_cancellation.IsCancellationRequested) { }
         catch (Exception exception)
@@ -101,21 +101,8 @@ public partial class RequestLogWindow : Window
         if (LogGrid is null || SummaryText is null) return;
         var account = AccountFilter.SelectedItem as string;
         var rows = account is null || account == AllAccounts ? _records : _records.Where(record => record.Account == account).ToList();
-        var priced = rows.Select(record => record with { EstimatedCost = RequestCostEstimator.Estimate(record) }).ToList();
-        LogGrid.ItemsSource = priced;
+        LogGrid.ItemsSource = rows;
         SummaryText.Text = $"{rows.Count} requests / {rows.Select(record => record.SessionId).Distinct().Count()} sessions";
-        var covered = priced.Count(record => record.EstimatedCost.HasValue);
-        var input = TokenSum(rows.Select(record => record.InputTokens));
-        var output = TokenSum(rows.Select(record => record.OutputTokens));
-        var cached = TokenSum(rows.Select(record => record.CachedTokens));
-        var cost = covered == 0 ? "No priced responses" : "$" + priced.Sum(record => record.EstimatedCost ?? 0).ToString("N6", System.Globalization.CultureInfo.InvariantCulture);
-        CostSummaryText.Text = $"Input {input} / Output {output} / Cached {cached} tokens | Standard API estimate {cost} ({covered}/{rows.Count} requests priced)";
-    }
-
-    private static string TokenSum(IEnumerable<long?> values)
-    {
-        var known = values.Where(value => value.HasValue).Select(value => value!.Value).ToList();
-        return known.Count == 0 ? "No usage reported" : known.Sum().ToString("N0");
     }
 
     #endregion
