@@ -31,7 +31,6 @@ public partial class RequestLogWindow : Window
         InitializeComponent();
         AccountFilter.ItemsSource = new[] { AllAccounts };
         AccountFilter.SelectedIndex = 0;
-        UpdateTrackingButton();
         Loaded += Window_Loaded;
         Closed += (_, _) => _cancellation.Cancel();
     }
@@ -45,20 +44,6 @@ public partial class RequestLogWindow : Window
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
 
     private void AccountFilter_SelectionChanged(object sender, SelectionChangedEventArgs e) => ApplyFilter();
-
-    private async void Tracking_Click(object sender, RoutedEventArgs e)
-    {
-        TrackingButton.IsEnabled = false;
-        try
-        {
-            if (RequestTrackingConfiguration.Enabled) await RequestTrackingConfiguration.DisableAsync();
-            else await RequestTrackingConfiguration.EnableAsync();
-            StatusText.Text = "Routing updated. Reload VS Code to apply it to Codex. Existing requests continue with their current routing.";
-            UpdateTrackingButton();
-        }
-        catch (Exception exception) { StatusText.Text = exception.Message; }
-        finally { TrackingButton.IsEnabled = true; }
-    }
 
     #endregion
 
@@ -93,7 +78,8 @@ public partial class RequestLogWindow : Window
             AccountFilter.ItemsSource = choices;
             AccountFilter.SelectedItem = choices.Contains(selected) ? selected : AllAccounts;
             ApplyFilter();
-            StatusText.Text = _records.Count == 0 ? "No logged HTTP model requests were found in the last 7 days." : $"Updated {DateTimeOffset.Now:HH:mm:ss}. Showing up to {RequestLogService.MaximumRows} requests retained on this computer.";
+            var attributed = _records.Count(record => record.Account != RequestLogService.UnknownAccount && record.Account != "Request omitted account header");
+            StatusText.Text = _records.Count == 0 ? "No model response usage or HTTP request records were found in the last 7 days." : $"Updated {DateTimeOffset.Now:HH:mm:ss}. {_records.Count(record => record.InputTokens.HasValue && record.OutputTokens.HasValue)}/{_records.Count} rows have actual token usage; {attributed}/{_records.Count} rows have captured request account identity. Hover a row for its source and response ID.";
         }
         catch (OperationCanceledException) when (_cancellation.IsCancellationRequested) { }
         catch (Exception exception)
@@ -122,17 +108,15 @@ public partial class RequestLogWindow : Window
         var input = TokenSum(rows.Select(record => record.InputTokens));
         var output = TokenSum(rows.Select(record => record.OutputTokens));
         var cached = TokenSum(rows.Select(record => record.CachedTokens));
-        var cost = covered == 0 ? "Unavailable" : "$" + priced.Sum(record => record.EstimatedCost ?? 0).ToString("N6", System.Globalization.CultureInfo.InvariantCulture);
+        var cost = covered == 0 ? "No priced responses" : "$" + priced.Sum(record => record.EstimatedCost ?? 0).ToString("N6", System.Globalization.CultureInfo.InvariantCulture);
         CostSummaryText.Text = $"Input {input} / Output {output} / Cached {cached} tokens | Standard API estimate {cost} ({covered}/{rows.Count} requests priced)";
     }
 
     private static string TokenSum(IEnumerable<long?> values)
     {
         var known = values.Where(value => value.HasValue).Select(value => value!.Value).ToList();
-        return known.Count == 0 ? "Not recorded" : known.Sum().ToString("N0");
+        return known.Count == 0 ? "No usage reported" : known.Sum().ToString("N0");
     }
-
-    private void UpdateTrackingButton() => TrackingButton.Content = RequestTrackingConfiguration.Enabled ? "Disable tracking" : "Enable tracking";
 
     #endregion
 }

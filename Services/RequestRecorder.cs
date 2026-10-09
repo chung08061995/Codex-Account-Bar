@@ -216,6 +216,7 @@ public sealed class RequestRecorder
         private DateTimeOffset _timestamp = DateTimeOffset.UtcNow;
         private string _model = "Unavailable";
         private string _key = Guid.NewGuid().ToString("N");
+        private string _responseId = "";
 
         #endregion
 
@@ -229,7 +230,7 @@ public sealed class RequestRecorder
 
         public async Task SaveAsync(string status, long? tokens = null, long? input = null, long? output = null, long? cached = null)
         {
-            try { await RequestCaptureStore.AppendAsync(new(_timestamp, accountId, threadId, _model, status, RequestId.Length == 0 ? _key : RequestId, tokens, input, output, cached)); }
+            try { await RequestCaptureStore.AppendAsync(new(_timestamp, accountId, threadId, _model, status, RequestId.Length == 0 ? _key : RequestId, tokens, input, output, cached, _responseId)); }
             catch (Exception exception) { AppLog.Error("Persist request metadata", new IOException(exception.GetType().Name)); }
         }
 
@@ -241,6 +242,7 @@ public sealed class RequestRecorder
                 var root = document.RootElement;
                 if (!root.TryGetProperty("type", out var type) || type.GetString() is not ("response.created" or "response.completed" or "response.failed")) return;
                 if (!root.TryGetProperty("response", out var response)) return;
+                if (response.TryGetProperty("id", out var responseId) && responseId.ValueKind == JsonValueKind.String) _responseId = responseId.GetString() ?? "";
                 if (type.GetString() == "response.created")
                 {
                     _timestamp = DateTimeOffset.UtcNow;

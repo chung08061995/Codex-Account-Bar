@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace CodexAccountBar.Services;
 
-public sealed record RequestCapture(DateTimeOffset Timestamp, string AccountId, string ThreadId, string Model, string Status, string RequestId, long? Tokens, long? InputTokens = null, long? OutputTokens = null, long? CachedTokens = null);
+public sealed record RequestCapture(DateTimeOffset Timestamp, string AccountId, string ThreadId, string Model, string Status, string RequestId, long? Tokens, long? InputTokens = null, long? OutputTokens = null, long? CachedTokens = null, string ResponseId = "");
 
 public static class RequestCaptureStore
 {

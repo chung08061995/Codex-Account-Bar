@@ -14,9 +14,9 @@
         <Grid Margin="0,0,0,12">
             <StackPanel>
                 <TextBlock Text="Request Log" FontSize="24" FontWeight="Bold"/>
-                <TextBlock Text="Latest 500 captured and logged model requests from the last 7 days, newest first." Foreground="{StaticResource Muted}" Margin="0,5,0,0"/>
+                <TextBlock Text="Latest 500 model responses and HTTP failures from the last 7 days, newest first." Foreground="{StaticResource Muted}" Margin="0,5,0,0"/>
             </StackPanel>
-            <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center" Orientation="Horizontal"><Button x:Name="TrackingButton" Style="{StaticResource ActionButton}" Margin="0,0,8,0" Click="Tracking_Click" AutomationProperties.Name="Toggle request tracking">Enable tracking</Button><Button x:Name="RefreshButton" Style="{StaticResource ActionButton}" Click="Refresh_Click" AutomationProperties.Name="Refresh request log">Refresh</Button></StackPanel>
+            <Button x:Name="RefreshButton" HorizontalAlignment="Right" VerticalAlignment="Center" Style="{StaticResource ActionButton}" Click="Refresh_Click" AutomationProperties.Name="Refresh request log">Refresh</Button>
         </Grid>
         <DockPanel Grid.Row="1" Margin="0,0,0,12">
             <TextBlock Text="Account" VerticalAlignment="Center" Margin="0,0,10,0"/>
@@ -28,6 +28,7 @@
                   Background="{StaticResource Surface}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"
                   HorizontalGridLinesBrush="{StaticResource Border}" RowBackground="{StaticResource Surface}" AlternatingRowBackground="{StaticResource Surface2}"
                   EnableRowVirtualization="True" SelectionMode="Single" AutomationProperties.Name="Recent Codex requests">
+            <DataGrid.RowStyle><Style TargetType="DataGridRow"><Setter Property="ToolTip" Value="{Binding Details}"/></Style></DataGrid.RowStyle>
             <DataGrid.Resources>
                 <Style TargetType="DataGridColumnHeader">
                     <Setter Property="Background" Value="{StaticResource Surface2}"/>
@@ -64,7 +65,7 @@
         <StackPanel Grid.Row="3" Margin="0,12,0,0">
             <TextBlock x:Name="CostSummaryText" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,8"/>
             <TextBlock x:Name="StatusText" Text="Loading request log..." TextWrapping="Wrap"/>
-            <TextBlock Text="Account identifies the authentication sent with each captured request; reload VS Code after enabling tracking. Older requests without capture remain Not recorded. Cached tokens are included in Input. Totals cover the displayed rows only; missing usage or model pricing is excluded from cost. USD estimates use Standard API token rates dated 09 Oct 2026 for GPT-6.1 Sol and GPT-5.3 Codex, including long-context rates for Sol. Estimates exclude tool fees and Fast/Ultrafast premiums and are not ChatGPT subscription charges."
+            <TextBlock Text="Tokens load directly from Codex response history; Cached is part of Input. Account is shown only when request authentication was captured. Historical identity cannot be reconstructed from the session creator. Dash means usage was not reported. Totals cover displayed rows only. Costs use Standard API rates dated 09 Oct 2026 and exclude tool fees and Fast/Ultrafast premiums; they are estimates, not ChatGPT subscription charges."
                        Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,7,0,0"/>
         </StackPanel>
     </Grid>
