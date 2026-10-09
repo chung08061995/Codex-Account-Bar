@@ -35,6 +35,15 @@ public sealed class RequestLogService
         var records = new List<RequestLogRecord>();
         var captures = RequestCaptureStore.Read().GroupBy(record => record.RequestId).Select(group => group.Last()).ToList();
         var requestIds = captures.Where(record => Regex.IsMatch(record.Status, @"\b(?:HTTP )?\d{3}\b")).Select(record => record.RequestId).ToHashSet(StringComparer.Ordinal);
+        var rows = logs.Query($"SELECT ts, ts_nanos, substr(feedback_log_body, 1, CASE WHEN instr(feedback_log_body, ' headers=') > 0 THEN instr(feedback_log_body, ' headers=') - 1 ELSE 4096 END), thread_id, CASE WHEN instr(feedback_log_body, '\"x-oai-request-id\":') > 0 THEN substr(feedback_log_body, instr(feedback_log_body, '\"x-oai-request-id\":'), 120) ELSE '' END FROM logs WHERE ts >= CAST(? AS INTEGER) AND target = 'codex_http_client::client' AND feedback_log_body LIKE '%Request completed method=POST url=%/responses status=%' ORDER BY ts DESC, ts_nanos DESC, id DESC LIMIT {MaximumRows}", since);
+        var modelsByRequest = rows.Select(row => new
+        {
+            RequestId = Regex.Match(row[4] ?? "", "\"x-oai-request-id\":\\s*\"([^\"]+)\"").Groups[1].Value,
+            Model = ModelFromLog(row[2] ?? "")
+        }).Where(row => row.RequestId.Length > 0 && row.Model.Length > 0)
+            .GroupBy(row => row.RequestId, StringComparer.Ordinal)
+            .Where(group => group.Select(row => row.Model).Distinct(StringComparer.Ordinal).Count() == 1)
+            .ToDictionary(group => group.Key, group => group.First().Model, StringComparer.Ordinal);
         foreach (var capture in captures)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -43,9 +52,10 @@ public sealed class RequestLogService
             var account = accounts.TryGetValue(capture.AccountId, out var email) ? email : capture.AccountId.Length == 0 ? UnknownAccount : capture.AccountId;
             var status = Regex.Match(capture.Status, @"\b(?:HTTP )?(\d{3})\b").Groups[1].Value;
             if (status.Length == 0) continue;
-            records.Add(new(capture.Timestamp, account, title, capture.ThreadId, capture.Model == "Unavailable" ? "?" : capture.Model, status) { ResponseId = capture.ResponseId, Details = $"Account captured from authentication sent with this request. HTTP request ID: {capture.RequestId}." });
+            var model = capture.Model;
+            if (string.IsNullOrWhiteSpace(model) || model is "Unavailable" or "?") model = modelsByRequest.GetValueOrDefault(capture.RequestId) ?? "?";
+            records.Add(new(capture.Timestamp, account, title, capture.ThreadId, model, status) { ResponseId = capture.ResponseId, Details = $"Account captured from authentication sent with this request. HTTP request ID: {capture.RequestId}." });
         }
-        var rows = logs.Query($"SELECT ts, ts_nanos, substr(feedback_log_body, 1, CASE WHEN instr(feedback_log_body, ' headers=') > 0 THEN instr(feedback_log_body, ' headers=') - 1 ELSE 4096 END), thread_id, CASE WHEN instr(feedback_log_body, '\"x-oai-request-id\":') > 0 THEN substr(feedback_log_body, instr(feedback_log_body, '\"x-oai-request-id\":'), 120) ELSE '' END FROM logs WHERE ts >= CAST(? AS INTEGER) AND target = 'codex_http_client::client' AND feedback_log_body LIKE '%Request completed method=POST url=%/responses status=%' ORDER BY ts DESC, ts_nanos DESC, id DESC LIMIT {MaximumRows}", since);
         foreach (var row in rows)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -64,10 +74,13 @@ public sealed class RequestLogService
         var timestamp = DateTimeOffset.FromUnixTimeSeconds(long.Parse(row[0]!, CultureInfo.InvariantCulture))
             .AddTicks(long.Parse(row[1]!, CultureInfo.InvariantCulture) / 100);
         var body = row[2] ?? "";
-        var model = Regex.Match(body, @"\bmodel=""?([\w.\-/]+)", RegexOptions.CultureInvariant).Groups[1].Value;
+        var model = ModelFromLog(body);
         var status = Regex.Match(body, @"\bstatus=(\d{3})\b", RegexOptions.CultureInvariant).Groups[1].Value;
         return new(timestamp, UnknownAccount, title, sessionId, model.Length == 0 ? "?" : model, status.Length == 0 ? "?" : status) { Details = "This HTTP request predates account capture or has no matching authentication record. Its account cannot be inferred from the current account or session creator." };
     }
+
+    private static string ModelFromLog(string body)
+        => Regex.Match(body, @"\bmodel=""?([\w.\-/]+)", RegexOptions.CultureInvariant).Groups[1].Value;
 
     private static string DatabasePath(string home, string prefix)
     {
