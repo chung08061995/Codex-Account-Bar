@@ -1,6 +1,6 @@
 namespace CodexAccountBar.Models;
 
-public sealed record RequestLogRecord(DateTimeOffset Timestamp, string Account, string SessionName, string SessionId, string Model, string Status)
+public sealed record RequestLogRecord(DateTimeOffset Timestamp, string Account, string SessionName, string SessionId, string Model, string Status, string SessionCreator)
 {
     #region Properties
 

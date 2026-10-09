@@ -19,8 +19,8 @@
             <Button x:Name="RefreshButton" Style="{StaticResource ActionButton}" HorizontalAlignment="Right" VerticalAlignment="Center" Click="Refresh_Click" AutomationProperties.Name="Refresh request log">Refresh</Button>
         </Grid>
         <DockPanel Grid.Row="1" Margin="0,0,0,12">
-            <TextBlock Text="Account" VerticalAlignment="Center" Margin="0,0,10,0"/>
-            <ComboBox x:Name="AccountFilter" Width="280" HorizontalAlignment="Left" SelectionChanged="AccountFilter_SelectionChanged" AutomationProperties.Name="Filter request log by account"/>
+            <TextBlock Text="Session creator" VerticalAlignment="Center" Margin="0,0,10,0"/>
+            <ComboBox x:Name="AccountFilter" Width="280" HorizontalAlignment="Left" SelectionChanged="AccountFilter_SelectionChanged" AutomationProperties.Name="Filter request log by session creator"/>
             <TextBlock x:Name="SummaryText" VerticalAlignment="Center" Margin="16,0,0,0" Foreground="{StaticResource Muted}"/>
         </DockPanel>
         <DataGrid x:Name="LogGrid" Grid.Row="2" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False"
@@ -47,7 +47,8 @@
             </DataGrid.Resources>
             <DataGrid.Columns>
                 <DataGridTextColumn Header="Time (local)" Binding="{Binding LocalTime}" SortMemberPath="Timestamp" Width="195" ElementStyle="{StaticResource LogText}"/>
-                <DataGridTextColumn Header="Account" Binding="{Binding Account}" Width="235" ElementStyle="{StaticResource LogText}"/>
+                <DataGridTextColumn Header="Request account" Binding="{Binding Account}" Width="125" ElementStyle="{StaticResource LogText}"/>
+                <DataGridTextColumn Header="Session creator" Binding="{Binding SessionCreator}" Width="235" ElementStyle="{StaticResource LogText}"/>
                 <DataGridTemplateColumn Header="Session name" SortMemberPath="SessionName" Width="*" MinWidth="180">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate><TextBlock Text="{Binding SessionName}" Style="{StaticResource LogText}"><TextBlock.ToolTip><StackPanel MaxWidth="500"><TextBlock Text="{Binding SessionName}" TextWrapping="Wrap" Foreground="Black"/><TextBlock Text="{Binding SessionId}" Margin="0,5,0,0" Foreground="Black"/></StackPanel></TextBlock.ToolTip></TextBlock></DataTemplate>
@@ -59,7 +60,7 @@
         </DataGrid>
         <StackPanel Grid.Row="3" Margin="0,12,0,0">
             <TextBlock x:Name="StatusText" Text="Loading request log..." TextWrapping="Wrap"/>
-            <TextBlock Text="Account is the session creator recorded by Codex; requests after an account switch may belong to another account. Unknown account means no saved account matches. Time is when HTTP response headers were received; full streaming duration, WebSocket calls and unlogged failures are unavailable."
+            <TextBlock Text="Request account is not recorded in these Codex logs and cannot be recovered reliably. Session creator identifies who created the conversation; it does not identify who sent a request. The filter uses session creator. Time is when HTTP response headers were received; full streaming duration, WebSocket calls and unlogged failures are unavailable."
                        Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,7,0,0"/>
         </StackPanel>
     </Grid>

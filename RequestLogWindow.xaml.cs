@@ -74,7 +74,7 @@ public partial class RequestLogWindow : Window
             _records = await _logs.ReadAsync(_codex.CodexHome, accounts, _cancellation.Token);
             _cancellation.Token.ThrowIfCancellationRequested();
             var selected = AccountFilter.SelectedItem as string ?? AllAccounts;
-            var choices = new[] { AllAccounts }.Concat(accounts.Values).Concat(_records.Select(record => record.Account)).Distinct().OrderBy(value => value == AllAccounts ? "" : value).ToList();
+            var choices = new[] { AllAccounts }.Concat(accounts.Values).Concat(_records.Select(record => record.SessionCreator)).Distinct().OrderBy(value => value == AllAccounts ? "" : value).ToList();
             AccountFilter.ItemsSource = choices;
             AccountFilter.SelectedItem = choices.Contains(selected) ? selected : AllAccounts;
             ApplyFilter();
@@ -99,7 +99,7 @@ public partial class RequestLogWindow : Window
     {
         if (LogGrid is null || SummaryText is null) return;
         var account = AccountFilter.SelectedItem as string;
-        var rows = account is null || account == AllAccounts ? _records : _records.Where(record => record.Account == account).ToList();
+        var rows = account is null || account == AllAccounts ? _records : _records.Where(record => record.SessionCreator == account).ToList();
         LogGrid.ItemsSource = rows;
         SummaryText.Text = $"{rows.Count} requests / {rows.Select(record => record.SessionId).Distinct().Count()} sessions";
     }

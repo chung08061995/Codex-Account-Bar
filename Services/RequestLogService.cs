@@ -9,7 +9,7 @@ public sealed class RequestLogService
     #region Constants
 
     public const int MaximumRows = 500;
-    public const string UnknownAccount = "Unknown account";
+    public const string UnknownAccount = "Not recorded";
 
     #endregion
 
@@ -41,21 +41,21 @@ public sealed class RequestLogService
             var sessionId = row[3] ?? "Unavailable";
             sessions.TryGetValue(sessionId, out var session);
             var accountId = session?[2];
-            var account = accountId is not null && accounts.TryGetValue(accountId, out var email) ? email : UnknownAccount;
+            var creator = accountId is not null && accounts.TryGetValue(accountId, out var email) ? email : UnknownAccount;
             var title = session is null ? "Session name unavailable" : string.IsNullOrWhiteSpace(session[1]) ? $"Unnamed session ({sessionId})" : session[1]!;
-            records.Add(Parse(row, account, title, sessionId));
+            records.Add(Parse(row, title, sessionId, creator));
         }
         return records;
     }
 
-    private static RequestLogRecord Parse(string?[] row, string account, string title, string sessionId)
+    private static RequestLogRecord Parse(string?[] row, string title, string sessionId, string creator)
     {
         var timestamp = DateTimeOffset.FromUnixTimeSeconds(long.Parse(row[0]!, CultureInfo.InvariantCulture))
             .AddTicks(long.Parse(row[1]!, CultureInfo.InvariantCulture) / 100);
         var body = row[2] ?? "";
         var model = Regex.Match(body, @"\bmodel=""?([\w.\-/]+)", RegexOptions.CultureInvariant).Groups[1].Value;
         var status = Regex.Match(body, @"\bstatus=(\d{3})\b", RegexOptions.CultureInvariant).Groups[1].Value;
-        return new(timestamp, account, title, sessionId, model.Length == 0 ? "Unavailable" : model, status.Length == 0 ? "Unavailable" : $"HTTP {status}");
+        return new(timestamp, UnknownAccount, title, sessionId, model.Length == 0 ? "Unavailable" : model, status.Length == 0 ? "Unavailable" : $"HTTP {status}", creator);
     }
 
     private static string DatabasePath(string home, string prefix)
