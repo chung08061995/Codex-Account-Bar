@@ -143,7 +143,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _refreshTimer.Start();
     }
 
-    private async void RefreshTimer_Tick(object? sender, EventArgs e) => await RefreshAllAsync();
+    private async void RefreshTimer_Tick(object? sender, EventArgs e)
+    {
+        try { await RefreshAllAsync(); }
+        catch (Exception exception)
+        {
+            AppLog.Error("Automatic quota refresh", exception);
+            Message = $"Automatic refresh failed: {exception.Message}";
+        }
+    }
 
     private async void Add_Click(object sender, RoutedEventArgs e)
     {
@@ -218,13 +226,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         try
         {
             Message = $"Switching to {account.Email} and reloading VS Code…";
-            await _codex.SwitchAccountAsync(await _vault.ReadAuthAsync(account.Id));
+            var reloadError = await _codex.SwitchAccountAsync(await _vault.ReadAuthAsync(account.Id));
             foreach (var item in Accounts)
             {
                 item.IsActive = item.Id == account.Id;
                 item.NotifyAll();
             }
-            Message = $"Using {account.Email}. VS Code reload requested.";
+            Message = reloadError is null ? $"Using {account.Email}. VS Code reload requested. Continue the interrupted session in Codex." : $"Switched to {account.Email}. {reloadError}";
         }
         catch (Exception exception) { Message = exception.Message; }
     }
@@ -370,13 +378,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (!quotaExhausted && !requestFailed) return;
         var candidate = Accounts.Where(item => item.Id != account.Id && item.QuotaFailureCount == 0 && item.SessionUsed is < 100 && item.WeeklyUsed is < 100).OrderBy(item => Math.Max(item.SessionUsed ?? 0, item.WeeklyUsed ?? 0)).FirstOrDefault();
         if (candidate is null) return;
-        await _codex.SwitchAccountAsync(await _vault.ReadAuthAsync(candidate.Id));
+        var reloadError = await _codex.SwitchAccountAsync(await _vault.ReadAuthAsync(candidate.Id));
         foreach (var item in Accounts)
         {
             item.IsActive = item.Id == candidate.Id;
             item.NotifyAll();
         }
-        Message = $"{account.Email} is unavailable. Switched to {candidate.Email} and requested a VS Code reload.";
+        Message = reloadError is null ? $"Switched to {candidate.Email} and requested a VS Code reload. Continue the interrupted session in Codex." : $"Switched to {candidate.Email}. {reloadError}";
     }
 
     #endregion

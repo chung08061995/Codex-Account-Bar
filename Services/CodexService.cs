@@ -28,14 +28,14 @@ public sealed class CodexService
 
     public async Task<string?> ReadActiveAuthAsync() => File.Exists(AuthPath) ? await File.ReadAllTextAsync(AuthPath) : null;
 
-    public async Task SwitchAccountAsync(string json, CancellationToken cancellationToken = default)
+    public async Task<string?> SwitchAccountAsync(string json, CancellationToken cancellationToken = default)
     {
         var normalized = AuthInspector.Normalize(json);
         Directory.CreateDirectory(CodexHome);
         var temporary = AuthPath + ".cab.tmp";
         await File.WriteAllTextAsync(temporary, normalized, cancellationToken);
         File.Move(temporary, AuthPath, true);
-        await ReloadVsCodeAsync(cancellationToken);
+        return await TryReloadAfterSwitchAsync(cancellationToken);
     }
 
     public async Task ReloadVsCodeAsync(CancellationToken cancellationToken = default)
@@ -53,6 +53,28 @@ public sealed class CodexService
         await Task.Delay(150, cancellationToken);
         SendKeys.SendWait("{ENTER}");
     }
+
+    #endregion
+
+    #region Account Switch Recovery
+
+    private async Task<string?> TryReloadAfterSwitchAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await ReloadVsCodeAsync(cancellationToken);
+            return null;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or OperationCanceledException)
+        {
+            AppLog.Error("Reload VS Code after account switch", exception);
+            return "Account saved. VS Code reload was not requested. Run Developer: Restart Extension Host in VS Code, then continue the interrupted session.";
+        }
+    }
+
+    #endregion
+
+    #region Authentication
 
     public async Task<string> RefreshAuthAsync(string json, CancellationToken cancellationToken = default)
     {
