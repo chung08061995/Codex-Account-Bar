@@ -79,7 +79,7 @@ public partial class RequestLogWindow : Window
             AccountFilter.SelectedItem = choices.Contains(selected) ? selected : AllAccounts;
             ApplyFilter();
             var attributed = _records.Count(record => record.Account != RequestLogService.UnknownAccount && record.Account != "Request omitted account header");
-            StatusText.Text = _records.Count == 0 ? "No model response usage or HTTP request records were found in the last 7 days." : $"Updated {DateTimeOffset.Now:HH:mm:ss}. {attributed}/{_records.Count} rows have captured request account identity. Hover a row for its source and response ID.";
+            StatusText.Text = _records.Count == 0 ? "No HTTP model requests were found in the last 7 days." : $"Updated {DateTimeOffset.Now:HH:mm:ss}. {attributed}/{_records.Count} rows have captured request account identity. Hover a row for its source and request ID.";
         }
         catch (OperationCanceledException) when (_cancellation.IsCancellationRequested) { }
         catch (Exception exception)

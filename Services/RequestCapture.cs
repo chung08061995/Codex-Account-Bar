@@ -50,7 +50,12 @@ public static class RequestCaptureStore
                 catch (JsonException) { }
             }
         }
-        return records.GroupBy(record => record.RequestId).Select(group => group.Last()).OrderByDescending(record => record.Timestamp).Take(RequestLogService.MaximumRows).ToList();
+        return records.GroupBy(record => record.RequestId).Select(group =>
+        {
+            var latest = group.Last();
+            var http = group.FirstOrDefault(record => System.Text.RegularExpressions.Regex.IsMatch(record.Status, @"\bHTTP \d{3}\b"));
+            return http is null ? latest : latest with { Status = http.Status };
+        }).OrderByDescending(record => record.Timestamp).Take(RequestLogService.MaximumRows).ToList();
     }
 
     #endregion
