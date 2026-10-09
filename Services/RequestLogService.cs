@@ -29,33 +29,42 @@ public sealed class RequestLogService
         using var state = new LocalSqlite(statePath);
         using var logs = new LocalSqlite(logsPath);
         var columns = state.Query("PRAGMA table_info(threads)").Select(row => row[1]).ToHashSet();
-        var accountColumn = columns.Contains("creator_account_id") ? "creator_account_id" : "NULL";
         var nameColumn = columns.Contains("name") ? "COALESCE(NULLIF(name, ''), title)" : "title";
-        var sessions = state.Query($"SELECT id, {nameColumn}, {accountColumn} FROM threads").ToDictionary(row => row[0]!);
+        var sessions = state.Query($"SELECT id, {nameColumn} FROM threads").ToDictionary(row => row[0]!);
         var since = DateTimeOffset.UtcNow.AddDays(-7).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
         var records = new List<RequestLogRecord>();
-        var rows = logs.Query($"SELECT ts, ts_nanos, substr(feedback_log_body, 1, CASE WHEN instr(feedback_log_body, ' headers=') > 0 THEN instr(feedback_log_body, ' headers=') - 1 ELSE 4096 END), thread_id FROM logs WHERE ts >= CAST(? AS INTEGER) AND target = 'codex_http_client::client' AND feedback_log_body LIKE '%Request completed method=POST url=%/responses status=%' ORDER BY ts DESC, ts_nanos DESC, id DESC LIMIT {MaximumRows}", since);
+        var captures = RequestCaptureStore.Read().GroupBy(record => record.RequestId).Select(group => group.Last()).ToList();
+        var requestIds = captures.Select(record => record.RequestId).ToHashSet(StringComparer.Ordinal);
+        foreach (var capture in captures)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            sessions.TryGetValue(capture.ThreadId, out var session);
+            var title = string.IsNullOrWhiteSpace(session?[1]) ? "Session name unavailable" : session[1]!;
+            var account = accounts.TryGetValue(capture.AccountId, out var email) ? email : capture.AccountId.Length == 0 ? UnknownAccount : "Account not saved";
+            records.Add(new(capture.Timestamp, account, title, capture.ThreadId, capture.Model, capture.Status, capture.Tokens));
+        }
+        var rows = logs.Query($"SELECT ts, ts_nanos, substr(feedback_log_body, 1, CASE WHEN instr(feedback_log_body, ' headers=') > 0 THEN instr(feedback_log_body, ' headers=') - 1 ELSE 4096 END), thread_id, CASE WHEN instr(feedback_log_body, '\"x-oai-request-id\":') > 0 THEN substr(feedback_log_body, instr(feedback_log_body, '\"x-oai-request-id\":'), 120) ELSE '' END FROM logs WHERE ts >= CAST(? AS INTEGER) AND target = 'codex_http_client::client' AND feedback_log_body LIKE '%Request completed method=POST url=%/responses status=%' ORDER BY ts DESC, ts_nanos DESC, id DESC LIMIT {MaximumRows}", since);
         foreach (var row in rows)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var requestId = Regex.Match(row[4] ?? "", "\"x-oai-request-id\":\\s*\"([^\"]+)\"").Groups[1].Value;
+            if (requestIds.Contains(requestId)) continue;
             var sessionId = row[3] ?? "Unavailable";
             sessions.TryGetValue(sessionId, out var session);
-            var accountId = session?[2];
-            var creator = accountId is not null && accounts.TryGetValue(accountId, out var email) ? email : UnknownAccount;
             var title = session is null ? "Session name unavailable" : string.IsNullOrWhiteSpace(session[1]) ? $"Unnamed session ({sessionId})" : session[1]!;
-            records.Add(Parse(row, title, sessionId, creator));
+            records.Add(Parse(row, title, sessionId));
         }
-        return records;
+        return records.OrderByDescending(record => record.Timestamp).Take(MaximumRows).ToList();
     }
 
-    private static RequestLogRecord Parse(string?[] row, string title, string sessionId, string creator)
+    private static RequestLogRecord Parse(string?[] row, string title, string sessionId)
     {
         var timestamp = DateTimeOffset.FromUnixTimeSeconds(long.Parse(row[0]!, CultureInfo.InvariantCulture))
             .AddTicks(long.Parse(row[1]!, CultureInfo.InvariantCulture) / 100);
         var body = row[2] ?? "";
         var model = Regex.Match(body, @"\bmodel=""?([\w.\-/]+)", RegexOptions.CultureInvariant).Groups[1].Value;
         var status = Regex.Match(body, @"\bstatus=(\d{3})\b", RegexOptions.CultureInvariant).Groups[1].Value;
-        return new(timestamp, UnknownAccount, title, sessionId, model.Length == 0 ? "Unavailable" : model, status.Length == 0 ? "Unavailable" : $"HTTP {status}", creator);
+        return new(timestamp, UnknownAccount, title, sessionId, model.Length == 0 ? "Unavailable" : model, status.Length == 0 ? "Unavailable" : $"HTTP {status}");
     }
 
     private static string DatabasePath(string home, string prefix)

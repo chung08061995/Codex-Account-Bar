@@ -31,6 +31,7 @@ public partial class RequestLogWindow : Window
         InitializeComponent();
         AccountFilter.ItemsSource = new[] { AllAccounts };
         AccountFilter.SelectedIndex = 0;
+        UpdateTrackingButton();
         Loaded += Window_Loaded;
         Closed += (_, _) => _cancellation.Cancel();
     }
@@ -44,6 +45,20 @@ public partial class RequestLogWindow : Window
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
 
     private void AccountFilter_SelectionChanged(object sender, SelectionChangedEventArgs e) => ApplyFilter();
+
+    private async void Tracking_Click(object sender, RoutedEventArgs e)
+    {
+        TrackingButton.IsEnabled = false;
+        try
+        {
+            if (RequestTrackingConfiguration.Enabled) await RequestTrackingConfiguration.DisableAsync();
+            else await RequestTrackingConfiguration.EnableAsync();
+            StatusText.Text = "Routing updated. Reload VS Code to apply it to Codex. Existing requests continue with their current routing.";
+            UpdateTrackingButton();
+        }
+        catch (Exception exception) { StatusText.Text = exception.Message; }
+        finally { TrackingButton.IsEnabled = true; }
+    }
 
     #endregion
 
@@ -74,7 +89,7 @@ public partial class RequestLogWindow : Window
             _records = await _logs.ReadAsync(_codex.CodexHome, accounts, _cancellation.Token);
             _cancellation.Token.ThrowIfCancellationRequested();
             var selected = AccountFilter.SelectedItem as string ?? AllAccounts;
-            var choices = new[] { AllAccounts }.Concat(accounts.Values).Concat(_records.Select(record => record.SessionCreator)).Distinct().OrderBy(value => value == AllAccounts ? "" : value).ToList();
+            var choices = new[] { AllAccounts }.Concat(accounts.Values).Concat(_records.Select(record => record.Account)).Distinct().OrderBy(value => value == AllAccounts ? "" : value).ToList();
             AccountFilter.ItemsSource = choices;
             AccountFilter.SelectedItem = choices.Contains(selected) ? selected : AllAccounts;
             ApplyFilter();
@@ -99,10 +114,12 @@ public partial class RequestLogWindow : Window
     {
         if (LogGrid is null || SummaryText is null) return;
         var account = AccountFilter.SelectedItem as string;
-        var rows = account is null || account == AllAccounts ? _records : _records.Where(record => record.SessionCreator == account).ToList();
+        var rows = account is null || account == AllAccounts ? _records : _records.Where(record => record.Account == account).ToList();
         LogGrid.ItemsSource = rows;
         SummaryText.Text = $"{rows.Count} requests / {rows.Select(record => record.SessionId).Distinct().Count()} sessions";
     }
+
+    private void UpdateTrackingButton() => TrackingButton.Content = RequestTrackingConfiguration.Enabled ? "Disable tracking" : "Enable tracking";
 
     #endregion
 }

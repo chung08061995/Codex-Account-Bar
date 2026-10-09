@@ -11,6 +11,9 @@ internal static class UsageHttpClient
     #region Public Methods
 
     public static HttpClient Create()
+        => new(CreateHandler()) { Timeout = TimeSpan.FromSeconds(15) };
+
+    public static HttpClientHandler CreateHandler()
     {
         var handler = new HttpClientHandler();
         if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("HTTPS_PROXY")) && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ALL_PROXY")))
@@ -26,7 +29,7 @@ internal static class UsageHttpClient
                 handler.Proxy = proxy;
             }
         }
-        return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(15) };
+        return handler;
     }
 
     #endregion

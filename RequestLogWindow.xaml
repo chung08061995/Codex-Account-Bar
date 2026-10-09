@@ -16,11 +16,11 @@
                 <TextBlock Text="Request Log" FontSize="24" FontWeight="Bold"/>
                 <TextBlock Text="Latest 500 logged HTTP model requests from the last 7 days, newest first." Foreground="{StaticResource Muted}" Margin="0,5,0,0"/>
             </StackPanel>
-            <Button x:Name="RefreshButton" Style="{StaticResource ActionButton}" HorizontalAlignment="Right" VerticalAlignment="Center" Click="Refresh_Click" AutomationProperties.Name="Refresh request log">Refresh</Button>
+            <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center" Orientation="Horizontal"><Button x:Name="TrackingButton" Style="{StaticResource ActionButton}" Margin="0,0,8,0" Click="Tracking_Click" AutomationProperties.Name="Toggle request tracking">Enable tracking</Button><Button x:Name="RefreshButton" Style="{StaticResource ActionButton}" Click="Refresh_Click" AutomationProperties.Name="Refresh request log">Refresh</Button></StackPanel>
         </Grid>
         <DockPanel Grid.Row="1" Margin="0,0,0,12">
-            <TextBlock Text="Session creator" VerticalAlignment="Center" Margin="0,0,10,0"/>
-            <ComboBox x:Name="AccountFilter" Width="280" HorizontalAlignment="Left" SelectionChanged="AccountFilter_SelectionChanged" AutomationProperties.Name="Filter request log by session creator"/>
+            <TextBlock Text="Account" VerticalAlignment="Center" Margin="0,0,10,0"/>
+            <ComboBox x:Name="AccountFilter" Width="280" HorizontalAlignment="Left" SelectionChanged="AccountFilter_SelectionChanged" AutomationProperties.Name="Filter request log by request account"/>
             <TextBlock x:Name="SummaryText" VerticalAlignment="Center" Margin="16,0,0,0" Foreground="{StaticResource Muted}"/>
         </DockPanel>
         <DataGrid x:Name="LogGrid" Grid.Row="2" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False"
@@ -47,8 +47,7 @@
             </DataGrid.Resources>
             <DataGrid.Columns>
                 <DataGridTextColumn Header="Time (local)" Binding="{Binding LocalTime}" SortMemberPath="Timestamp" Width="195" ElementStyle="{StaticResource LogText}"/>
-                <DataGridTextColumn Header="Request account" Binding="{Binding Account}" Width="125" ElementStyle="{StaticResource LogText}"/>
-                <DataGridTextColumn Header="Session creator" Binding="{Binding SessionCreator}" Width="235" ElementStyle="{StaticResource LogText}"/>
+                <DataGridTextColumn Header="Account" Binding="{Binding Account}" Width="235" ElementStyle="{StaticResource LogText}"/>
                 <DataGridTemplateColumn Header="Session name" SortMemberPath="SessionName" Width="*" MinWidth="180">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate><TextBlock Text="{Binding SessionName}" Style="{StaticResource LogText}"><TextBlock.ToolTip><StackPanel MaxWidth="500"><TextBlock Text="{Binding SessionName}" TextWrapping="Wrap" Foreground="Black"/><TextBlock Text="{Binding SessionId}" Margin="0,5,0,0" Foreground="Black"/></StackPanel></TextBlock.ToolTip></TextBlock></DataTemplate>
@@ -56,11 +55,12 @@
                 </DataGridTemplateColumn>
                 <DataGridTextColumn Header="Model" Binding="{Binding Model}" Width="135" ElementStyle="{StaticResource LogText}"/>
                 <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="95" ElementStyle="{StaticResource LogText}"/>
+                <DataGridTextColumn Header="Tokens" Binding="{Binding TokenText}" Width="110" ElementStyle="{StaticResource LogText}"/>
             </DataGrid.Columns>
         </DataGrid>
         <StackPanel Grid.Row="3" Margin="0,12,0,0">
             <TextBlock x:Name="StatusText" Text="Loading request log..." TextWrapping="Wrap"/>
-            <TextBlock Text="Request account is not recorded in these Codex logs and cannot be recovered reliably. Session creator identifies who created the conversation; it does not identify who sent a request. The filter uses session creator. Time is when HTTP response headers were received; full streaming duration, WebSocket calls and unlogged failures are unavailable."
+            <TextBlock Text="Account comes from the authentication header sent with each captured request. Tracking forwards requests locally to OpenAI and stores metadata only. Reload VS Code after enabling or disabling tracking. Older requests without capture remain Not recorded. Tokens are reported usage, not a quota percentage; failed requests do not confirm token consumption."
                        Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,7,0,0"/>
         </StackPanel>
     </Grid>
